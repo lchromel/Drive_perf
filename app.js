@@ -45,7 +45,7 @@ const TOP_RENTAL_CARS_DUBAI = [
 const BANNER_LAYOUTS = [
   { label: "Photo", value: "photo", disabled: false },
   { label: "Black", value: "black", disabled: true },
-  { label: "Red", value: "master-red", disabled: true },
+  { label: "Red", value: "master-red", disabled: false },
 ];
 const TEXT_ALIGN_OPTIONS = [
   { value: "left", icon: "./assets/icons/text-align-left.svg", alt: "Align left" },
@@ -1146,7 +1146,7 @@ function buildRenderPayload() {
       badgeShiftX: Math.max(0, Math.min(100, Number(set.badgeShiftX) || 0)),
       badgeShiftY: Math.max(0, Math.min(100, Number(set.badgeShiftY) || 0)),
     })),
-    layoutType: "photo",
+    layoutType: state.bannerLayout,
     sizes: ["1200x1200", "1200x1350", "1200x628", "1080x1920"],
   };
 }
