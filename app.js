@@ -43,9 +43,9 @@ const TOP_RENTAL_CARS_DUBAI = [
 ];
 
 const BANNER_LAYOUTS = [
-  { label: "Photo", value: "photo" },
-  { label: "Black", value: "black" },
-  { label: "Red", value: "master-red" },
+  { label: "Photo", value: "photo", disabled: false },
+  { label: "Black", value: "black", disabled: true },
+  { label: "Red", value: "master-red", disabled: true },
 ];
 const TEXT_ALIGN_OPTIONS = [
   { value: "left", icon: "./assets/icons/text-align-left.svg", alt: "Align left" },
@@ -66,6 +66,7 @@ const IMAGE_SHIFT_ONE_STEP_PX = IMAGE_SHIFT_MAX_PX / IMAGE_SHIFT_STEP_COUNT;
 const IMAGE_SCALE_MIN = 100;
 const IMAGE_SCALE_MAX = 150;
 const IMAGE_SCALE_STEP = 3;
+const BANNER_AUTO_RENDER_DEBOUNCE_MS = 550;
 const ACCENT_PRESET_VALUES = {
   lime: "#E3FF74",
   red: "#FF1A1A",
@@ -166,6 +167,7 @@ const textSetsWrapEl = document.getElementById("textSetsWrap");
 const addTextSetBtn = document.getElementById("addTextSetBtn");
 const renderBannersBtn = document.getElementById("renderBannersBtn");
 const bannerSetsViewEl = document.getElementById("bannerSetsView");
+let bannerAutoRenderTimer = null;
 
 function setSourceStatus(kind) {
   uploadImageStatusEl.textContent = SOURCE_STATUS[kind] || SOURCE_STATUS.none;
@@ -551,8 +553,13 @@ function renderLayoutTypes() {
     chip.type = "button";
     chip.className = "angle-chip";
     chip.textContent = layout.label;
+    if (layout.disabled) {
+      chip.disabled = true;
+      chip.classList.add("is-disabled");
+    }
     if (state.bannerLayout === layout.value) chip.classList.add("is-active");
     chip.addEventListener("click", () => {
+      if (layout.disabled) return;
       state.bannerLayout = layout.value;
       state.renderedBanners = [];
       renderLayoutTypes();
@@ -568,12 +575,18 @@ function renderLayoutTypes() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "accent-swatch-btn";
+    const isDisabled = key === "red";
+    if (isDisabled) {
+      btn.disabled = true;
+      btn.classList.add("is-disabled");
+    }
     if (state.bannerAccentPreset === key) btn.classList.add("is-active");
     const swatch = document.createElement("span");
     swatch.className = "accent-swatch-core";
     swatch.style.background = key === "red" ? ACCENT_PRESET_VALUES.red : ACCENT_PRESET_VALUES.lime;
     btn.appendChild(swatch);
     btn.addEventListener("click", () => {
+      if (isDisabled) return;
       state.bannerAccentPreset = key;
       state.renderedBanners = [];
       renderLayoutTypes();
@@ -624,7 +637,7 @@ function autoResizeTextarea(textarea) {
 
 function resolveAccentColor() {
   const preset = String(state.bannerAccentPreset || "lime").toLowerCase();
-  if (preset === "red") return ACCENT_PRESET_VALUES.red;
+  if (preset === "red") return ACCENT_PRESET_VALUES.lime;
   return ACCENT_PRESET_VALUES.lime;
 }
 
@@ -1046,15 +1059,37 @@ function buildRenderPayload() {
       badgeShiftX: Math.max(0, Math.min(100, Number(set.badgeShiftX) || 0)),
       badgeShiftY: Math.max(0, Math.min(100, Number(set.badgeShiftY) || 0)),
     })),
-    layoutType: state.bannerLayout,
+    layoutType: "photo",
     sizes: ["1200x1200", "1200x1350", "1200x628", "1080x1920"],
   };
+}
+
+function scheduleBannerAutoRender() {
+  if (bannerAutoRenderTimer) {
+    clearTimeout(bannerAutoRenderTimer);
+    bannerAutoRenderTimer = null;
+  }
+  if (!state.bannerSourceImageUrl || state.bannerRendering || !state.renderedBanners.length) {
+    return;
+  }
+  bannerAutoRenderTimer = setTimeout(() => {
+    bannerAutoRenderTimer = null;
+    if (!state.bannerSourceImageUrl || state.bannerRendering || !state.renderedBanners.length) {
+      return;
+    }
+    createBanners();
+  }, BANNER_AUTO_RENDER_DEBOUNCE_MS);
 }
 
 async function createBanners() {
   if (!state.bannerSourceImageUrl) {
     alert("UPLOAD OR GENERATE IMAGE FIRST");
     return;
+  }
+
+  if (bannerAutoRenderTimer) {
+    clearTimeout(bannerAutoRenderTimer);
+    bannerAutoRenderTimer = null;
   }
 
   state.bannerRendering = true;
@@ -1206,16 +1241,21 @@ renderBannersBtn.addEventListener("click", createBanners);
 
 if (imageShiftXEl) {
   imageShiftXEl.addEventListener("input", (event) => {
+    const hadRenderedBanners = state.renderedBanners.length > 0;
     state.imageShiftXStep = clampShiftStep(Number(event.target.value) || 0);
     renderShiftControls();
     state.renderedBanners = [];
     renderBannerSetsView();
     renderTopAction();
+    if (hadRenderedBanners) {
+      scheduleBannerAutoRender();
+    }
   });
 }
 
 if (imageScaleEl) {
   imageScaleEl.addEventListener("input", (event) => {
+    const hadRenderedBanners = state.renderedBanners.length > 0;
     const raw = Number(event.target.value);
     if (!Number.isFinite(raw)) {
       state.imageScalePercent = IMAGE_SCALE_MIN;
@@ -1228,16 +1268,23 @@ if (imageScaleEl) {
     state.renderedBanners = [];
     renderBannerSetsView();
     renderTopAction();
+    if (hadRenderedBanners) {
+      scheduleBannerAutoRender();
+    }
   });
 }
 
 if (imageShiftYEl) {
   imageShiftYEl.addEventListener("input", (event) => {
+    const hadRenderedBanners = state.renderedBanners.length > 0;
     state.imageShiftYStep = clampShiftStep(Number(event.target.value) || 0);
     renderShiftControls();
     state.renderedBanners = [];
     renderBannerSetsView();
     renderTopAction();
+    if (hadRenderedBanners) {
+      scheduleBannerAutoRender();
+    }
   });
 }
 
