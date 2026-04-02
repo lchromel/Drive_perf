@@ -11,6 +11,7 @@ import threading
 import zipfile
 import hashlib
 import uuid
+import cgi
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http import HTTPStatus
@@ -45,6 +46,7 @@ IMAGE_LIBRARY_FILE = ROOT / "output" / "image_library.json"
 IMAGE_LIBRARY_LOCK = threading.Lock()
 WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
 WEB_APP_BASIC_AUTH_PASSWORD = os.getenv("WEB_APP_BASIC_AUTH_PASSWORD", "")
+AUTH_COOKIE_NAME = "drive_perf_auth"
 HEADLINE_ITALIC_FONT_CANDIDATES = [
     ROOT / "assets" / "fonts" / "YangoGroupHeadline-HeavyItalic.ttf",
     Path("/Users/d-vershinin/Yandex.Disk.localized/Yango/New Yango Fonts 3/Yango Group Headline Heavy/TTF/YangoGroupHeadline-HeavyItalic.ttf"),
@@ -190,6 +192,34 @@ def is_request_authorized(authorization_header: str) -> bool:
     return hmac.compare_digest(username, WEB_APP_BASIC_AUTH_USERNAME) and hmac.compare_digest(
         password, WEB_APP_BASIC_AUTH_PASSWORD
     )
+
+
+def _build_auth_cookie_value() -> str:
+    digest = hashlib.sha256(
+        f"{WEB_APP_BASIC_AUTH_USERNAME}:{WEB_APP_BASIC_AUTH_PASSWORD}".encode("utf-8")
+    ).hexdigest()
+    return digest
+
+
+def _parse_cookie_header(cookie_header: str) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    for chunk in str(cookie_header or "").split(";"):
+        part = chunk.strip()
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        cookies[key.strip()] = value.strip()
+    return cookies
+
+
+def is_request_authorized_by_cookie(cookie_header: str) -> bool:
+    if not is_basic_auth_enabled():
+        return True
+    cookies = _parse_cookie_header(cookie_header)
+    auth_cookie = cookies.get(AUTH_COOKIE_NAME, "")
+    if not auth_cookie:
+        return False
+    return hmac.compare_digest(auth_cookie, _build_auth_cookie_value())
 
 
 def _ensure_output_directories() -> None:
@@ -878,6 +908,21 @@ def _save_uploaded_data_url(data_url: str, original_name: str = "") -> str:
     stem = Path(original_name).stem if original_name else "upload"
     safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem).strip("_") or "upload"
     file_name = f"{safe_stem}_{stamp}.{ext}"
+    file_path = GENERATED_DIR / file_name
+    image.save(file_path, format="PNG", optimize=True)
+    return f"/output/generated/{file_name}"
+
+
+def _save_uploaded_file_bytes(file_bytes: bytes, original_name: str = "") -> str:
+    if not file_bytes:
+        raise ValueError("Uploaded image is empty")
+
+    image = Image.open(BytesIO(file_bytes)).convert("RGB")
+    _ensure_output_directories()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = Path(original_name).stem if original_name else "upload"
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem).strip("_") or "upload"
+    file_name = f"{safe_stem}_{stamp}.png"
     file_path = GENERATED_DIR / file_name
     image.save(file_path, format="PNG", optimize=True)
     return f"/output/generated/{file_name}"
@@ -2314,10 +2359,23 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def end_headers(self) -> None:
+        if is_basic_auth_enabled():
+            if is_request_authorized(self.headers.get("Authorization", "")) or is_request_authorized_by_cookie(
+                self.headers.get("Cookie", "")
+            ):
+                self.send_header(
+                    "Set-Cookie",
+                    f"{AUTH_COOKIE_NAME}={_build_auth_cookie_value()}; Path=/; HttpOnly; SameSite=Lax",
+                )
+        super().end_headers()
+
     def _require_basic_auth(self) -> bool:
         if self.path == "/health":
             return True
-        if is_request_authorized(self.headers.get("Authorization", "")):
+        if is_request_authorized(self.headers.get("Authorization", "")) or is_request_authorized_by_cookie(
+            self.headers.get("Cookie", "")
+        ):
             return True
 
         self.send_response(HTTPStatus.UNAUTHORIZED)
@@ -2356,6 +2414,27 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         try:
+            if self.path == "/api/upload-image":
+                content_type = self.headers.get("Content-Type", "")
+                if content_type.startswith("multipart/form-data"):
+                    form = cgi.FieldStorage(
+                        fp=self.rfile,
+                        headers=self.headers,
+                        environ={
+                            "REQUEST_METHOD": "POST",
+                            "CONTENT_TYPE": content_type,
+                        },
+                    )
+                    image_field = form["image"] if "image" in form else None
+                    if image_field is None or not getattr(image_field, "file", None):
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "image is required"})
+                        return
+                    file_bytes = image_field.file.read()
+                    file_name = str(getattr(image_field, "filename", "") or "").strip()
+                    local_url = _save_uploaded_file_bytes(file_bytes, file_name)
+                    self._send_json(HTTPStatus.OK, {"image_local_url": local_url})
+                    return
+
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length)
             body = json.loads(raw.decode("utf-8"))

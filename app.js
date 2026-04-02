@@ -239,6 +239,7 @@ async function deleteLibraryImage(imageUrl) {
   try {
     const response = await fetch("/api/delete-library-image", {
       method: "POST",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ imageUrl: targetUrl }),
     });
@@ -336,7 +337,9 @@ function renderSelectedSource() {
 
 async function fetchImageLibrary() {
   try {
-    const response = await fetch("/api/library-images");
+    const response = await fetch("/api/library-images", {
+      credentials: "same-origin",
+    });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.error || "Failed to load saved images");
@@ -921,6 +924,7 @@ function renderBannerSetsView() {
 async function createZipAndDownload(bannerUrls, fileName) {
   const response = await fetch("/api/create-banners-zip", {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ bannerUrls }),
   });
@@ -954,17 +958,13 @@ async function downloadAllBanners() {
 }
 
 async function uploadCustomImage(file) {
-  const reader = new FileReader();
-  const dataUrl = await new Promise((resolve, reject) => {
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+  const formData = new FormData();
+  formData.append("image", file, file.name || "upload.png");
 
   const response = await fetch("/api/upload-image", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageData: dataUrl, fileName: file.name || "" }),
+    credentials: "same-origin",
+    body: formData,
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Upload failed");
@@ -993,6 +993,7 @@ async function generatePrompt() {
   try {
     const response = await fetch("/api/generate-image", {
       method: "POST",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         carModel: currentCarModel,
@@ -1076,6 +1077,7 @@ async function createBanners() {
 
     const response = await fetch("/api/render-banners", {
       method: "POST",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildRenderPayload()),
     });
@@ -1161,6 +1163,7 @@ promptApplyBtn.addEventListener("click", () => {
         }
         response = await fetch("/api/regenerate-image", {
           method: "POST",
+          credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prompt: state.basePromptText,
@@ -1169,6 +1172,7 @@ promptApplyBtn.addEventListener("click", () => {
       } else {
         response = await fetch("/api/edit-image", {
           method: "POST",
+          credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             imageUrl: state.imageUrl,
