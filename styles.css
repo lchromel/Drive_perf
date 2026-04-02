@@ -361,11 +361,6 @@ body {
   border-color: #0e0e0e;
 }
 
-.accent-swatch-btn.is-disabled {
-  opacity: 0.32;
-  cursor: not-allowed;
-}
-
 .accent-swatch-core {
   width: 24px;
   height: 24px;

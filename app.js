@@ -67,6 +67,8 @@ const IMAGE_SCALE_MIN = 100;
 const IMAGE_SCALE_MAX = 150;
 const IMAGE_SCALE_STEP = 3;
 const BANNER_AUTO_RENDER_DEBOUNCE_MS = 550;
+const CUSTOM_ACCENT_TRIGGER_WINDOW_MS = 550;
+const CUSTOM_ACCENT_TRIGGER_TAP_COUNT = 3;
 const ACCENT_PRESET_VALUES = {
   lime: "#E3FF74",
   red: "#FF1A1A",
@@ -92,6 +94,7 @@ const state = {
   sourceLibraryOpen: false,
   bannerLayout: "photo",
   bannerAccentPreset: "lime",
+  bannerAccentCustomColor: ACCENT_PRESET_VALUES.lime,
   bannerTextSets: [
     {
       title: "Drive with comfort every day",
@@ -139,6 +142,7 @@ const colorNameEl = document.getElementById("colorName");
 const presetColorsEl = document.getElementById("presetColors");
 const angleRowEl = document.getElementById("angleRow");
 const customColorInput = document.getElementById("customColorInput");
+const bannerAccentColorInput = document.getElementById("bannerAccentColorInput");
 const generateBtn = document.getElementById("generateBtn");
 
 const loaderEl = document.getElementById("loader");
@@ -170,6 +174,34 @@ const addTextSetBtn = document.getElementById("addTextSetBtn");
 const renderBannersBtn = document.getElementById("renderBannersBtn");
 const bannerSetsViewEl = document.getElementById("bannerSetsView");
 let bannerAutoRenderTimer = null;
+let customAccentTapCount = 0;
+let customAccentTapTimer = null;
+
+function resetCustomAccentTapSequence() {
+  customAccentTapCount = 0;
+  if (customAccentTapTimer) {
+    clearTimeout(customAccentTapTimer);
+    customAccentTapTimer = null;
+  }
+}
+
+function registerCustomAccentTap() {
+  customAccentTapCount += 1;
+  if (customAccentTapTimer) {
+    clearTimeout(customAccentTapTimer);
+  }
+  customAccentTapTimer = setTimeout(() => {
+    resetCustomAccentTapSequence();
+  }, CUSTOM_ACCENT_TRIGGER_WINDOW_MS);
+
+  if (customAccentTapCount >= CUSTOM_ACCENT_TRIGGER_TAP_COUNT) {
+    resetCustomAccentTapSequence();
+    if (bannerAccentColorInput) {
+      bannerAccentColorInput.value = state.bannerAccentCustomColor || ACCENT_PRESET_VALUES.lime;
+      bannerAccentColorInput.click();
+    }
+  }
+}
 
 function setSourceStatus(kind) {
   uploadImageStatusEl.textContent = SOURCE_STATUS[kind] || SOURCE_STATUS.none;
@@ -596,18 +628,29 @@ function renderLayoutTypes() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "accent-swatch-btn";
-    const isDisabled = key === "red";
-    if (isDisabled) {
-      btn.disabled = true;
-      btn.classList.add("is-disabled");
+    const isCustomTrigger = key === "red";
+    if (state.bannerAccentPreset === key || (isCustomTrigger && state.bannerAccentPreset === "custom")) {
+      btn.classList.add("is-active");
     }
-    if (state.bannerAccentPreset === key) btn.classList.add("is-active");
     const swatch = document.createElement("span");
     swatch.className = "accent-swatch-core";
-    swatch.style.background = key === "red" ? ACCENT_PRESET_VALUES.red : ACCENT_PRESET_VALUES.lime;
+    swatch.style.background = key === "lime"
+      ? ACCENT_PRESET_VALUES.lime
+      : state.bannerAccentPreset === "custom"
+        ? state.bannerAccentCustomColor
+        : ACCENT_PRESET_VALUES.red;
     btn.appendChild(swatch);
     btn.addEventListener("click", () => {
-      if (isDisabled) return;
+      if (isCustomTrigger) {
+        state.bannerAccentPreset = "red";
+        invalidateRenderedBanners();
+        renderLayoutTypes();
+        renderBannerSetsView();
+        renderTopAction();
+        registerCustomAccentTap();
+        return;
+      }
+      resetCustomAccentTapSequence();
       state.bannerAccentPreset = key;
       invalidateRenderedBanners();
       renderLayoutTypes();
@@ -658,7 +701,10 @@ function autoResizeTextarea(textarea) {
 
 function resolveAccentColor() {
   const preset = String(state.bannerAccentPreset || "lime").toLowerCase();
-  if (preset === "red") return ACCENT_PRESET_VALUES.lime;
+  if (preset === "custom") {
+    return state.bannerAccentCustomColor || ACCENT_PRESET_VALUES.lime;
+  }
+  if (preset === "red") return ACCENT_PRESET_VALUES.red;
   return ACCENT_PRESET_VALUES.lime;
 }
 
@@ -1219,6 +1265,17 @@ customColorInput.addEventListener("input", (event) => {
   colorNameEl.textContent = state.colorLabel;
   renderColors();
 });
+
+if (bannerAccentColorInput) {
+  bannerAccentColorInput.addEventListener("input", (event) => {
+    state.bannerAccentPreset = "custom";
+    state.bannerAccentCustomColor = event.target.value || ACCENT_PRESET_VALUES.lime;
+    invalidateRenderedBanners();
+    renderLayoutTypes();
+    renderBannerSetsView();
+    renderTopAction();
+  });
+}
 
 generateBtn.addEventListener("click", generatePrompt);
 promptApplyBtn.addEventListener("click", () => {
