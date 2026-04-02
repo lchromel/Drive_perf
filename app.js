@@ -83,6 +83,7 @@ const state = {
   editPromptText: "",
   editSuggestions: [],
   imageHistory: [],
+  imageLibrary: [],
   imageUrl: "",
   generating: false,
   activeTab: "image",
@@ -149,6 +150,7 @@ const topActionBtn = document.getElementById("topActionBtn");
 const uploadImageInputEl = document.getElementById("uploadImageInput");
 const uploadImageBtnEl = document.getElementById("uploadImageBtn");
 const uploadImageStatusEl = document.getElementById("uploadImageStatus");
+const sourceLibraryEl = document.getElementById("sourceLibrary");
 const layoutTypeRowEl = document.getElementById("layoutTypeRow");
 const imageScaleEl = document.getElementById("imageScale");
 const imageShiftXEl = document.getElementById("imageShiftX");
@@ -162,11 +164,143 @@ function setSourceStatus(kind) {
   uploadImageStatusEl.textContent = SOURCE_STATUS[kind] || SOURCE_STATUS.none;
 }
 
+function normalizeLibraryImage(item) {
+  if (!item || typeof item !== "object") return null;
+  const imageUrl = String(item.image_url || "").trim();
+  if (!imageUrl) return null;
+  return {
+    id: String(item.id || imageUrl),
+    image_url: imageUrl,
+    banner_source_url: String(item.banner_source_url || "").trim(),
+    effective_banner_source_url: String(item.effective_banner_source_url || imageUrl).trim() || imageUrl,
+    banner_ready: Boolean(item.banner_ready),
+    kind: String(item.kind || "generated").trim() || "generated",
+    created_at: String(item.created_at || "").trim(),
+    label: String(item.label || "").trim(),
+    prompt: String(item.prompt || "").trim(),
+    car_model: String(item.car_model || "").trim(),
+    color_name: String(item.color_name || "").trim(),
+    original_name: String(item.original_name || "").trim(),
+    edit_prompt: String(item.edit_prompt || "").trim(),
+    source_image_url: String(item.source_image_url || "").trim(),
+  };
+}
+
+function findLibraryImageByUrl(url) {
+  const target = String(url || "").trim();
+  if (!target) return null;
+  return state.imageLibrary.find((item) => item.image_url === target) || null;
+}
+
+function setSourceStatusForImage(record) {
+  const kind = String(record?.kind || "").toLowerCase();
+  if (kind === "uploaded") {
+    setSourceStatus("uploaded");
+    return;
+  }
+  if (kind) {
+    setSourceStatus("generated");
+    return;
+  }
+  setSourceStatus(state.imageUrl ? "generated" : "none");
+}
+
 function getCurrentCarModel() {
   if (state.selectedCarModel === CUSTOM_CAR_OPTION) {
     return state.customCarModel.trim();
   }
   return state.selectedCarModel.trim();
+}
+
+function applySelectedImage(record, options = {}) {
+  const image = normalizeLibraryImage(record);
+  if (!image) return;
+  const { pushHistory = true } = options;
+  if (pushHistory && state.imageUrl && state.imageUrl !== image.image_url) {
+    pushImageToHistory(state.imageUrl);
+  }
+  state.imageUrl = image.image_url;
+  state.basePromptText = image.prompt || "";
+  state.editPromptText = "";
+  state.editSuggestions = [];
+  state.renderedBanners = [];
+  setSourceStatusForImage(image);
+  renderPromptSuggestions();
+  renderBannerSetsView();
+  renderUiState();
+}
+
+function renderSourceLibrary() {
+  if (!sourceLibraryEl) return;
+  sourceLibraryEl.innerHTML = "";
+
+  if (!state.imageLibrary.length) {
+    const empty = document.createElement("p");
+    empty.className = "source-library-empty";
+    empty.textContent = "No saved images yet.";
+    sourceLibraryEl.appendChild(empty);
+    return;
+  }
+
+  state.imageLibrary.forEach((item) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "source-card";
+    if (state.imageUrl && item.image_url === state.imageUrl) {
+      card.classList.add("is-active");
+    }
+
+    const preview = document.createElement("img");
+    preview.className = "source-card-image";
+    preview.src = item.image_url;
+    preview.alt = item.car_model || item.original_name || item.label || item.kind || "Saved image";
+    card.appendChild(preview);
+
+    const meta = document.createElement("div");
+    meta.className = "source-card-meta";
+
+    const title = document.createElement("p");
+    title.className = "source-card-title";
+    title.textContent = item.car_model || item.original_name || item.label || item.kind.toUpperCase();
+    meta.appendChild(title);
+
+    const detail = document.createElement("p");
+    detail.className = "source-card-detail";
+    detail.textContent = item.kind === "uploaded" ? "Uploaded" : item.kind === "edited" ? "Edited" : "Generated";
+    meta.appendChild(detail);
+
+    const badge = document.createElement("span");
+    badge.className = "source-card-badge";
+    badge.textContent = item.banner_ready ? "Uncrop ready" : "Source ready";
+    meta.appendChild(badge);
+
+    card.appendChild(meta);
+    card.addEventListener("click", () => applySelectedImage(item));
+    sourceLibraryEl.appendChild(card);
+  });
+}
+
+async function fetchImageLibrary() {
+  try {
+    const response = await fetch("/api/library-images");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load saved images");
+    }
+    state.imageLibrary = Array.isArray(payload.images)
+      ? payload.images.map((item) => normalizeLibraryImage(item)).filter(Boolean)
+      : [];
+    if (state.imageUrl) {
+      const selected = findLibraryImageByUrl(state.imageUrl);
+      if (selected) {
+        setSourceStatusForImage(selected);
+      }
+    }
+    renderSourceLibrary();
+    renderUiState();
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function renderCarModelControl() {
@@ -258,6 +392,7 @@ function renderUiState() {
   if (promptInputEl.value !== state.editPromptText) {
     promptInputEl.value = state.editPromptText;
   }
+  renderSourceLibrary();
 }
 
 function pushImageToHistory(url) {
@@ -822,6 +957,7 @@ async function generatePrompt() {
     if (previousImageUrl && previousImageUrl !== state.imageUrl) {
       pushImageToHistory(previousImageUrl);
     }
+    await fetchImageLibrary();
     setSourceStatus("generated");
   } catch (error) {
     alert(`ERROR: ${error.message || "UNKNOWN ERROR"}`);
@@ -889,6 +1025,7 @@ async function createBanners() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Render failed");
     state.renderedBanners = (payload.banners || []).filter((item) => item && item.url && item.size);
+    await fetchImageLibrary();
   } catch (error) {
     alert(`ERROR: ${error.message || "UNKNOWN ERROR"}`);
   } finally {
@@ -993,6 +1130,7 @@ promptApplyBtn.addEventListener("click", () => {
       state.imageUrl = editedUrl;
       state.editPromptText = "";
       state.renderedBanners = [];
+      await fetchImageLibrary();
       setSourceStatus("generated");
       renderBannerSetsView();
     } catch (error) {
@@ -1059,6 +1197,7 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     state.editPromptText = "";
     state.editSuggestions = [];
     state.renderedBanners = [];
+    await fetchImageLibrary();
     setSourceStatus("uploaded");
     renderBannerSetsView();
     renderUiState();
@@ -1132,6 +1271,7 @@ renderTextSetsEditor();
 renderBannerSetsView();
 renderPromptSuggestions();
 renderUiState();
+fetchImageLibrary();
 
 window.addEventListener("resize", () => {
   if (state.activeTab === "banner") {
@@ -1159,7 +1299,7 @@ if (promptBackBtn) {
     state.editPromptText = "";
     state.editSuggestions = [];
     state.renderedBanners = [];
-    setSourceStatus("generated");
+    setSourceStatusForImage(findLibraryImageByUrl(previous));
     renderBannerSetsView();
     renderUiState();
   });

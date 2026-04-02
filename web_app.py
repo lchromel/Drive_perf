@@ -7,6 +7,7 @@ import base64
 import binascii
 import hmac
 import re
+import threading
 import zipfile
 import hashlib
 import uuid
@@ -40,6 +41,8 @@ OUTPUT_DIR = ROOT / "output" / "banners"
 GENERATED_DIR = ROOT / "output" / "generated"
 ZIP_DIR = ROOT / "output" / "archives"
 UNCROP_DIR = ROOT / "output" / "uncrop"
+IMAGE_LIBRARY_FILE = ROOT / "output" / "image_library.json"
+IMAGE_LIBRARY_LOCK = threading.Lock()
 WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
 WEB_APP_BASIC_AUTH_PASSWORD = os.getenv("WEB_APP_BASIC_AUTH_PASSWORD", "")
 HEADLINE_ITALIC_FONT_CANDIDATES = [
@@ -187,6 +190,201 @@ def is_request_authorized(authorization_header: str) -> bool:
     return hmac.compare_digest(username, WEB_APP_BASIC_AUTH_USERNAME) and hmac.compare_digest(
         password, WEB_APP_BASIC_AUTH_PASSWORD
     )
+
+
+def _ensure_output_directories() -> None:
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ZIP_DIR.mkdir(parents=True, exist_ok=True)
+    UNCROP_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_LIBRARY_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _utc_timestamp() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _load_image_library_records_unlocked() -> list[dict]:
+    _ensure_output_directories()
+    if not IMAGE_LIBRARY_FILE.exists():
+        return []
+    try:
+        raw = json.loads(IMAGE_LIBRARY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _save_image_library_records_unlocked(records: list[dict]) -> None:
+    _ensure_output_directories()
+    temp_path = IMAGE_LIBRARY_FILE.with_suffix(".tmp")
+    temp_path.write_text(
+        json.dumps(records, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(IMAGE_LIBRARY_FILE)
+
+
+def _infer_library_kind_from_name(file_name: str) -> str:
+    name = str(file_name or "").lower()
+    if name.startswith("edited_"):
+        return "edited"
+    if name.startswith("generated_"):
+        return "generated"
+    return "uploaded"
+
+
+def _seed_image_library_from_generated_files(records: list[dict]) -> list[dict]:
+    existing_urls = {
+        str(item.get("image_url", "")).strip()
+        for item in records
+        if str(item.get("image_url", "")).strip()
+    }
+    if not GENERATED_DIR.exists():
+        return records
+
+    changed = False
+    for file_path in sorted(GENERATED_DIR.glob("*")):
+        if not file_path.is_file():
+            continue
+        public_url = f"/output/generated/{file_path.name}"
+        if public_url in existing_urls:
+            continue
+        changed = True
+        records.append(
+            {
+                "id": uuid.uuid4().hex,
+                "image_url": public_url,
+                "banner_source_url": "",
+                "kind": _infer_library_kind_from_name(file_path.name),
+                "created_at": datetime.utcfromtimestamp(file_path.stat().st_mtime).replace(microsecond=0).isoformat() + "Z",
+                "label": file_path.stem,
+                "original_name": file_path.name,
+            }
+        )
+        existing_urls.add(public_url)
+
+    if changed:
+        records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return records
+
+
+def _public_image_library_record(record: dict) -> dict:
+    image_url = str(record.get("image_url", "")).strip()
+    banner_source_url = str(record.get("banner_source_url", "")).strip()
+    return {
+        "id": str(record.get("id", "")).strip(),
+        "image_url": image_url,
+        "banner_source_url": banner_source_url,
+        "effective_banner_source_url": banner_source_url or image_url,
+        "banner_ready": bool(banner_source_url),
+        "kind": str(record.get("kind", "generated")).strip() or "generated",
+        "created_at": str(record.get("created_at", "")).strip(),
+        "label": str(record.get("label", "")).strip(),
+        "prompt": str(record.get("prompt", "")).strip(),
+        "car_model": str(record.get("car_model", "")).strip(),
+        "color_name": str(record.get("color_name", "")).strip(),
+        "original_name": str(record.get("original_name", "")).strip(),
+        "edit_prompt": str(record.get("edit_prompt", "")).strip(),
+        "source_image_url": str(record.get("source_image_url", "")).strip(),
+    }
+
+
+def list_image_library() -> list[dict]:
+    with IMAGE_LIBRARY_LOCK:
+        records = _load_image_library_records_unlocked()
+        records = _seed_image_library_from_generated_files(records)
+        _save_image_library_records_unlocked(records)
+        return [_public_image_library_record(item) for item in records]
+
+
+def _upsert_image_library_record(
+    image_url: str,
+    *,
+    kind: str,
+    banner_source_url: str = "",
+    prompt: str = "",
+    car_model: str = "",
+    color_name: str = "",
+    original_name: str = "",
+    edit_prompt: str = "",
+    source_image_url: str = "",
+    label: str = "",
+) -> dict:
+    normalized_image_url = str(image_url or "").strip()
+    if not normalized_image_url:
+        raise ValueError("image_url is required")
+
+    with IMAGE_LIBRARY_LOCK:
+        records = _load_image_library_records_unlocked()
+        records = _seed_image_library_from_generated_files(records)
+
+        record = None
+        for item in records:
+            if str(item.get("image_url", "")).strip() == normalized_image_url:
+                record = item
+                break
+
+        if record is None:
+            record = {
+                "id": uuid.uuid4().hex,
+                "image_url": normalized_image_url,
+                "created_at": _utc_timestamp(),
+            }
+            records.append(record)
+
+        record["kind"] = str(kind or record.get("kind") or "generated").strip() or "generated"
+        record["image_url"] = normalized_image_url
+        record["banner_source_url"] = str(banner_source_url or record.get("banner_source_url") or "").strip()
+        record["prompt"] = str(prompt or record.get("prompt") or "").strip()
+        record["car_model"] = str(car_model or record.get("car_model") or "").strip()
+        record["color_name"] = str(color_name or record.get("color_name") or "").strip()
+        record["original_name"] = str(original_name or record.get("original_name") or "").strip()
+        record["edit_prompt"] = str(edit_prompt or record.get("edit_prompt") or "").strip()
+        record["source_image_url"] = str(source_image_url or record.get("source_image_url") or "").strip()
+        if label:
+            record["label"] = str(label).strip()
+        elif not str(record.get("label", "")).strip():
+            record["label"] = Path(urlparse(normalized_image_url).path).stem or record["kind"]
+
+        records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        _save_image_library_records_unlocked(records)
+        return _public_image_library_record(record)
+
+
+def get_image_library_record(image_url: str) -> Optional[dict]:
+    normalized_image_url = str(image_url or "").strip()
+    if not normalized_image_url:
+        return None
+
+    with IMAGE_LIBRARY_LOCK:
+        records = _load_image_library_records_unlocked()
+        records = _seed_image_library_from_generated_files(records)
+        _save_image_library_records_unlocked(records)
+        for item in records:
+            if str(item.get("image_url", "")).strip() == normalized_image_url:
+                return dict(item)
+    return None
+
+
+def update_image_library_banner_source(image_url: str, banner_source_url: str) -> Optional[dict]:
+    normalized_image_url = str(image_url or "").strip()
+    normalized_banner_source_url = str(banner_source_url or "").strip()
+    if not normalized_image_url:
+        return None
+
+    with IMAGE_LIBRARY_LOCK:
+        records = _load_image_library_records_unlocked()
+        records = _seed_image_library_from_generated_files(records)
+        for item in records:
+            if str(item.get("image_url", "")).strip() != normalized_image_url:
+                continue
+            item["banner_source_url"] = normalized_banner_source_url
+            _save_image_library_records_unlocked(records)
+            return _public_image_library_record(item)
+    return None
 
 
 def load_tokens_from_file() -> None:
@@ -449,7 +647,7 @@ def generate_edit_suggestions_with_openai(car_model: str, base_prompt: str) -> l
 
 
 def _save_generated_image_bytes(image_bytes: bytes, *, prefix: str = "generated") -> str:
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directories()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"{prefix}_{stamp}.png"
     file_path = GENERATED_DIR / file_name
@@ -531,7 +729,7 @@ def generate_image_with_recraft(prompt: str) -> tuple[str, str]:
     b64_json = getattr(image, "b64_json", "") or ""
 
     if b64_json:
-        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_output_directories()
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_name = f"generated_{stamp}.png"
         file_path = GENERATED_DIR / file_name
@@ -585,7 +783,7 @@ def _download_remote_bytes(url: str) -> bytes:
 
 
 def _save_generated_image_local(remote_url: str) -> str:
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directories()
     raw = _download_remote_bytes(remote_url)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"generated_{stamp}.png"
@@ -645,7 +843,7 @@ def uncrop_image_with_clipdrop(source_image_url: str, *, padding: int = 500) -> 
 
     raw = _read_image_bytes_from_url(source_image_url)
     source_hash = hashlib.sha256(raw).hexdigest()[:20]
-    UNCROP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directories()
     file_name = f"uncrop_{source_hash}_{padding}.png"
     file_path = UNCROP_DIR / file_name
     if file_path.exists():
@@ -700,7 +898,7 @@ def _save_uploaded_data_url(data_url: str, original_name: str = "") -> str:
     raw = base64.b64decode(b64_part)
     image = Image.open(BytesIO(raw)).convert("RGB")
 
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directories()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     stem = Path(original_name).stem if original_name else "upload"
     safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem).strip("_") or "upload"
@@ -711,7 +909,7 @@ def _save_uploaded_data_url(data_url: str, original_name: str = "") -> str:
 
 
 def create_banners_zip(banner_urls: Iterable[str]) -> str:
-    ZIP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directories()
     files: list[Path] = []
     for url in banner_urls:
         path_str = str(url or "").strip()
@@ -2022,16 +2220,26 @@ def render_banner_images(
     image_scale: float = 1.0,
     image_shift_x: int = 0,
     image_shift_y: int = 0,
-) -> list[dict]:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+) -> tuple[list[dict], str]:
+    _ensure_output_directories()
 
     source_image = None
+    effective_image_url = str(image_url or "").strip()
     if image_url:
+        cached_record = get_image_library_record(image_url)
+        cached_banner_source_url = ""
+        if cached_record is not None:
+            cached_banner_source_url = str(cached_record.get("banner_source_url", "")).strip()
         try:
-            uncropped_url = uncrop_image_with_clipdrop(image_url, padding=650)
-            source_image = _fetch_image_from_url(uncropped_url)
+            if cached_banner_source_url:
+                effective_image_url = cached_banner_source_url
+            else:
+                effective_image_url = uncrop_image_with_clipdrop(image_url, padding=650)
+                update_image_library_banner_source(image_url, effective_image_url)
+            source_image = _fetch_image_from_url(effective_image_url)
         except Exception:
             # Safe fallback: keep banner generation available even if uncrop fails.
+            effective_image_url = str(image_url).strip()
             source_image = _fetch_image_from_url(image_url)
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
     normalized_layout = (layout_type or "master-red").strip() or "master-red"
@@ -2116,7 +2324,7 @@ def render_banner_images(
                     "url": f"/output/banners/{file_name}",
                 }
             )
-    return results
+    return results, effective_image_url
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -2151,6 +2359,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if self.path == "/api/library-images":
+            self._send_json(HTTPStatus.OK, {"images": list_image_library()})
             return
         super().do_GET()
 
@@ -2187,6 +2398,13 @@ class Handler(SimpleHTTPRequestHandler):
                     suggestions_future = executor.submit(generate_edit_suggestions_with_openai, car_model, prompt)
                     image_url, local_image_url = image_future.result()
                     suggestions = suggestions_future.result()
+                library_image = _upsert_image_library_record(
+                    local_image_url,
+                    kind="generated",
+                    prompt=prompt,
+                    car_model=car_model,
+                    color_name=color_name,
+                )
                 self._send_json(
                     HTTPStatus.OK,
                     {
@@ -2194,6 +2412,7 @@ class Handler(SimpleHTTPRequestHandler):
                         "image_local_url": local_image_url,
                         "prompt": prompt,
                         "edit_suggestions": suggestions,
+                        "library_image": library_image,
                     },
                 )
                 return
@@ -2205,7 +2424,12 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageData is required"})
                     return
                 local_url = _save_uploaded_data_url(image_data, file_name)
-                self._send_json(HTTPStatus.OK, {"image_local_url": local_url})
+                library_image = _upsert_image_library_record(
+                    local_url,
+                    kind="uploaded",
+                    original_name=file_name,
+                )
+                self._send_json(HTTPStatus.OK, {"image_local_url": local_url, "library_image": library_image})
                 return
 
             if self.path == "/api/regenerate-image":
@@ -2214,12 +2438,18 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "prompt is required"})
                     return
                 image_url, local_image_url = generate_image_with_recraft(prompt)
+                library_image = _upsert_image_library_record(
+                    local_image_url,
+                    kind="generated",
+                    prompt=prompt,
+                )
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "image_url": image_url,
                         "image_local_url": local_image_url,
                         "prompt": prompt,
+                        "library_image": library_image,
                     },
                 )
                 return
@@ -2234,7 +2464,13 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "editPrompt is required"})
                     return
                 edited_local_url = edit_image_with_gemini(image_url, edit_prompt)
-                self._send_json(HTTPStatus.OK, {"image_local_url": edited_local_url})
+                library_image = _upsert_image_library_record(
+                    edited_local_url,
+                    kind="edited",
+                    edit_prompt=edit_prompt,
+                    source_image_url=image_url,
+                )
+                self._send_json(HTTPStatus.OK, {"image_local_url": edited_local_url, "library_image": library_image})
                 return
 
             if self.path == "/api/create-banners-zip":
@@ -2285,7 +2521,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageUrl is required"})
                 return
 
-            banners = render_banner_images(
+            banners, effective_image_url = render_banner_images(
                 image_url=image_url,
                 text_sets=text_sets,
                 layout_type=layout_type,
@@ -2297,7 +2533,17 @@ class Handler(SimpleHTTPRequestHandler):
             if not banners:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "No supported sizes provided"})
                 return
-            self._send_json(HTTPStatus.OK, {"banners": banners})
+            selected_library_image = None
+            if image_url:
+                selected_library_image = get_image_library_record(image_url)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "banners": banners,
+                    "source_image_url": effective_image_url,
+                    "library_image": _public_image_library_record(selected_library_image) if selected_library_image else None,
+                },
+            )
         except Exception as exc:
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
