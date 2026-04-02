@@ -90,9 +90,12 @@ python3 web_app.py
    - `RECRAFT_API_TOKEN` или `RECRAFT_API_KEY`
    - `GEMINI_API_KEY`, если нужен `Edit image`
    - `CLIPDROP_API_KEY`, если нужен `uncrop`
+   - `WEB_APP_BASIC_AUTH_USERNAME`, если нужна авторизация на весь веб-интерфейс
+   - `WEB_APP_BASIC_AUTH_PASSWORD`, если нужна авторизация на весь веб-интерфейс
 3. Дождаться сборки и открыть выданный Railway-домен.
 
 Важно:
 
 - `tokens.txt` в Railway не нужен; для продакшена используйте только переменные окружения.
 - папка `output/` на Railway будет эфемерной: сгенерированные файлы могут исчезать после рестарта/редеплоя. Если понадобится постоянное хранение, следующим шагом вынесем файлы в S3/Cloudflare R2/Railway Volume.
+- если задать обе переменные `WEB_APP_BASIC_AUTH_USERNAME` и `WEB_APP_BASIC_AUTH_PASSWORD`, браузер будет запрашивать логин и пароль для всех страниц и API, кроме `GET /health`

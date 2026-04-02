@@ -4,6 +4,8 @@ import textwrap
 import urllib.request
 import urllib.error
 import base64
+import binascii
+import hmac
 import re
 import zipfile
 import hashlib
@@ -38,6 +40,8 @@ OUTPUT_DIR = ROOT / "output" / "banners"
 GENERATED_DIR = ROOT / "output" / "generated"
 ZIP_DIR = ROOT / "output" / "archives"
 UNCROP_DIR = ROOT / "output" / "uncrop"
+WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
+WEB_APP_BASIC_AUTH_PASSWORD = os.getenv("WEB_APP_BASIC_AUTH_PASSWORD", "")
 HEADLINE_ITALIC_FONT_CANDIDATES = [
     ROOT / "assets" / "fonts" / "YangoGroupHeadline-HeavyItalic.ttf",
     Path("/Users/d-vershinin/Yandex.Disk.localized/Yango/New Yango Fonts 3/Yango Group Headline Heavy/TTF/YangoGroupHeadline-HeavyItalic.ttf"),
@@ -153,6 +157,36 @@ ANGLE_RULES = {
         "car heading aligned with lane direction, non-static cinematic motion."
     ),
 }
+
+
+def is_basic_auth_enabled() -> bool:
+    return bool(WEB_APP_BASIC_AUTH_USERNAME and WEB_APP_BASIC_AUTH_PASSWORD)
+
+
+def is_request_authorized(authorization_header: str) -> bool:
+    if not is_basic_auth_enabled():
+        return True
+
+    header_value = str(authorization_header or "").strip()
+    if not header_value.startswith("Basic "):
+        return False
+
+    encoded = header_value[6:].strip()
+    if not encoded:
+        return False
+
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return False
+
+    return hmac.compare_digest(username, WEB_APP_BASIC_AUTH_USERNAME) and hmac.compare_digest(
+        password, WEB_APP_BASIC_AUTH_PASSWORD
+    )
 
 
 def load_tokens_from_file() -> None:
@@ -2097,13 +2131,32 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _require_basic_auth(self) -> bool:
+        if self.path == "/health":
+            return True
+        if is_request_authorized(self.headers.get("Authorization", "")):
+            return True
+
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="Drive_perf", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        body = b"Authentication required"
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_GET(self):
+        if not self._require_basic_auth():
+            return
         if self.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
             return
         super().do_GET()
 
     def do_POST(self):
+        if not self._require_basic_auth():
+            return
         if self.path not in {
             "/api/generate-image",
             "/api/regenerate-image",
