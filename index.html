@@ -63,6 +63,10 @@
               <div class="source-left">
                 <p class="field-label">Source Image:</p>
                 <p id="uploadImageStatus" class="source-status">Status</p>
+                <div id="selectedSourceBox" class="selected-source hidden">
+                  <img id="selectedSourcePreview" class="selected-source-preview" alt="Selected source image" />
+                  <button id="clearSourceBtn" class="clear-source-btn" type="button" aria-label="Clear selected source">×</button>
+                </div>
               </div>
               <button id="uploadImageBtn" class="upload-icon-btn" type="button" aria-label="Upload image">
                 <img class="upload-icon" src="./assets/icons/Upload.svg" alt="" aria-hidden="true" />
@@ -73,9 +77,24 @@
             <section class="section">
               <div class="source-library-header">
                 <p class="field-label">Saved Images:</p>
-                <p class="source-library-hint">Select any saved source. Banners will use its uncropped version automatically.</p>
+                <button
+                  id="sourceLibraryToggle"
+                  class="source-library-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="sourceLibrary"
+                >
+                  <span>Choose Source</span>
+                  <img
+                    id="sourceLibraryChevron"
+                    class="source-library-chevron"
+                    src="./assets/icons/ChevronDownM.svg"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
               </div>
-              <div id="sourceLibrary" class="source-library"></div>
+              <div id="sourceLibrary" class="source-library hidden"></div>
             </section>
 
             <section class="section">

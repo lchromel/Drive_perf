@@ -85,8 +85,10 @@ const state = {
   imageHistory: [],
   imageLibrary: [],
   imageUrl: "",
+  bannerSourceImageUrl: "",
   generating: false,
   activeTab: "image",
+  sourceLibraryOpen: false,
   bannerLayout: "photo",
   bannerAccentPreset: "lime",
   bannerTextSets: [
@@ -150,7 +152,12 @@ const topActionBtn = document.getElementById("topActionBtn");
 const uploadImageInputEl = document.getElementById("uploadImageInput");
 const uploadImageBtnEl = document.getElementById("uploadImageBtn");
 const uploadImageStatusEl = document.getElementById("uploadImageStatus");
+const selectedSourceBoxEl = document.getElementById("selectedSourceBox");
+const selectedSourcePreviewEl = document.getElementById("selectedSourcePreview");
+const clearSourceBtnEl = document.getElementById("clearSourceBtn");
 const sourceLibraryEl = document.getElementById("sourceLibrary");
+const sourceLibraryToggleEl = document.getElementById("sourceLibraryToggle");
+const sourceLibraryChevronEl = document.getElementById("sourceLibraryChevron");
 const layoutTypeRowEl = document.getElementById("layoutTypeRow");
 const imageScaleEl = document.getElementById("imageScale");
 const imageShiftXEl = document.getElementById("imageShiftX");
@@ -215,17 +222,13 @@ function getCurrentCarModel() {
 function applySelectedImage(record, options = {}) {
   const image = normalizeLibraryImage(record);
   if (!image) return;
-  const { pushHistory = true } = options;
-  if (pushHistory && state.imageUrl && state.imageUrl !== image.image_url) {
-    pushImageToHistory(state.imageUrl);
-  }
-  state.imageUrl = image.image_url;
-  state.basePromptText = image.prompt || "";
-  state.editPromptText = "";
-  state.editSuggestions = [];
+  const { closeLibrary = true } = options;
+  state.bannerSourceImageUrl = image.image_url;
   state.renderedBanners = [];
+  if (closeLibrary) {
+    state.sourceLibraryOpen = false;
+  }
   setSourceStatusForImage(image);
-  renderPromptSuggestions();
   renderBannerSetsView();
   renderUiState();
 }
@@ -233,6 +236,16 @@ function applySelectedImage(record, options = {}) {
 function renderSourceLibrary() {
   if (!sourceLibraryEl) return;
   sourceLibraryEl.innerHTML = "";
+  sourceLibraryEl.classList.toggle("hidden", !state.sourceLibraryOpen || !state.imageLibrary.length);
+  if (sourceLibraryToggleEl) {
+    sourceLibraryToggleEl.disabled = !state.imageLibrary.length;
+    sourceLibraryToggleEl.setAttribute("aria-expanded", state.sourceLibraryOpen ? "true" : "false");
+  }
+  if (sourceLibraryChevronEl) {
+    sourceLibraryChevronEl.src = state.sourceLibraryOpen
+      ? "./assets/icons/ChevronUpM.svg"
+      : "./assets/icons/ChevronDownM.svg";
+  }
 
   if (!state.imageLibrary.length) {
     const empty = document.createElement("p");
@@ -246,38 +259,33 @@ function renderSourceLibrary() {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "source-card";
-    if (state.imageUrl && item.image_url === state.imageUrl) {
+    if (state.bannerSourceImageUrl && item.image_url === state.bannerSourceImageUrl) {
       card.classList.add("is-active");
     }
+    card.setAttribute("aria-label", item.car_model || item.original_name || item.label || "Saved image");
 
     const preview = document.createElement("img");
     preview.className = "source-card-image";
     preview.src = item.image_url;
     preview.alt = item.car_model || item.original_name || item.label || item.kind || "Saved image";
     card.appendChild(preview);
-
-    const meta = document.createElement("div");
-    meta.className = "source-card-meta";
-
-    const title = document.createElement("p");
-    title.className = "source-card-title";
-    title.textContent = item.car_model || item.original_name || item.label || item.kind.toUpperCase();
-    meta.appendChild(title);
-
-    const detail = document.createElement("p");
-    detail.className = "source-card-detail";
-    detail.textContent = item.kind === "uploaded" ? "Uploaded" : item.kind === "edited" ? "Edited" : "Generated";
-    meta.appendChild(detail);
-
-    const badge = document.createElement("span");
-    badge.className = "source-card-badge";
-    badge.textContent = item.banner_ready ? "Uncrop ready" : "Source ready";
-    meta.appendChild(badge);
-
-    card.appendChild(meta);
     card.addEventListener("click", () => applySelectedImage(item));
     sourceLibraryEl.appendChild(card);
   });
+}
+
+function renderSelectedSource() {
+  if (!selectedSourceBoxEl || !selectedSourcePreviewEl) return;
+  const selected = findLibraryImageByUrl(state.bannerSourceImageUrl);
+  const hasSource = Boolean(state.bannerSourceImageUrl);
+  selectedSourceBoxEl.classList.toggle("hidden", !hasSource);
+  if (!hasSource) {
+    selectedSourcePreviewEl.removeAttribute("src");
+    return;
+  }
+  selectedSourcePreviewEl.src = state.bannerSourceImageUrl;
+  selectedSourcePreviewEl.alt =
+    selected?.car_model || selected?.original_name || selected?.label || "Selected source image";
 }
 
 async function fetchImageLibrary() {
@@ -290,8 +298,11 @@ async function fetchImageLibrary() {
     state.imageLibrary = Array.isArray(payload.images)
       ? payload.images.map((item) => normalizeLibraryImage(item)).filter(Boolean)
       : [];
-    if (state.imageUrl) {
-      const selected = findLibraryImageByUrl(state.imageUrl);
+    if (!state.bannerSourceImageUrl && state.imageUrl) {
+      state.bannerSourceImageUrl = state.imageUrl;
+    }
+    if (state.bannerSourceImageUrl) {
+      const selected = findLibraryImageByUrl(state.bannerSourceImageUrl);
       if (selected) {
         setSourceStatusForImage(selected);
       }
@@ -377,7 +388,7 @@ function renderTopAction() {
 function renderUiState() {
   loaderEl.classList.toggle("hidden", !state.generating);
   generateBtn.disabled = state.generating;
-  renderBannersBtn.disabled = state.bannerRendering || !state.imageUrl;
+  renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
   renderTabs();
   renderTopAction();
   imagePreviewFrameEl.classList.toggle("hidden", !state.imageUrl);
@@ -392,6 +403,7 @@ function renderUiState() {
   if (promptInputEl.value !== state.editPromptText) {
     promptInputEl.value = state.editPromptText;
   }
+  renderSelectedSource();
   renderSourceLibrary();
 }
 
@@ -948,6 +960,7 @@ async function generatePrompt() {
     if (!response.ok) throw new Error(payload.error || "Generation failed");
 
     state.imageUrl = payload.image_local_url || payload.image_url || "";
+    state.bannerSourceImageUrl = state.imageUrl;
     state.basePromptText = payload.prompt || "";
     state.editPromptText = "";
     state.editSuggestions = Array.isArray(payload.edit_suggestions)
@@ -971,7 +984,7 @@ async function generatePrompt() {
 
 function buildRenderPayload() {
   return {
-    imageUrl: state.imageUrl,
+    imageUrl: state.bannerSourceImageUrl,
     imageScale: (Number(state.imageScalePercent) || 100) / 100,
     imageShiftX: stepToShiftPx(Number(state.imageShiftXStep) || 0),
     // UX rule: moving Y slider right should move image up.
@@ -994,7 +1007,7 @@ function buildRenderPayload() {
 }
 
 async function createBanners() {
-  if (!state.imageUrl) {
+  if (!state.bannerSourceImageUrl) {
     alert("UPLOAD OR GENERATE IMAGE FIRST");
     return;
   }
@@ -1128,6 +1141,7 @@ promptApplyBtn.addEventListener("click", () => {
         pushImageToHistory(state.imageUrl);
       }
       state.imageUrl = editedUrl;
+      state.bannerSourceImageUrl = editedUrl;
       state.editPromptText = "";
       state.renderedBanners = [];
       await fetchImageLibrary();
@@ -1193,6 +1207,7 @@ uploadImageInputEl.addEventListener("change", async (event) => {
       pushImageToHistory(state.imageUrl);
     }
     state.imageUrl = localUrl;
+    state.bannerSourceImageUrl = localUrl;
     state.basePromptText = "";
     state.editPromptText = "";
     state.editSuggestions = [];
@@ -1259,6 +1274,24 @@ topActionBtn.addEventListener("click", async () => {
   await downloadAllBanners();
 });
 
+if (sourceLibraryToggleEl) {
+  sourceLibraryToggleEl.addEventListener("click", () => {
+    if (!state.imageLibrary.length) return;
+    state.sourceLibraryOpen = !state.sourceLibraryOpen;
+    renderUiState();
+  });
+}
+
+if (clearSourceBtnEl) {
+  clearSourceBtnEl.addEventListener("click", () => {
+    state.bannerSourceImageUrl = "";
+    state.renderedBanners = [];
+    setSourceStatus("none");
+    renderBannerSetsView();
+    renderUiState();
+  });
+}
+
 colorNameEl.textContent = state.colorLabel;
 promptInputEl.value = state.editPromptText;
 setSourceStatus("none");
@@ -1296,6 +1329,7 @@ if (promptBackBtn) {
     const previous = state.imageHistory.pop();
     if (!previous) return;
     state.imageUrl = previous;
+    state.bannerSourceImageUrl = previous;
     state.editPromptText = "";
     state.editSuggestions = [];
     state.renderedBanners = [];
