@@ -1,3 +1,6 @@
+[build]
+builder = "DOCKERFILE"
+
 [deploy]
 startCommand = "python web_app.py"
 healthcheckPath = "/health"

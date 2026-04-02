@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Yango Drive Prompt Builder</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <h1 class="brand-title">YangoDrive</h1>
+        </div>
+
+        <div class="tab-row" role="tablist" aria-label="Builder tabs">
+          <button id="tabImage" class="tab-btn is-active" type="button" role="tab" aria-selected="true">Image</button>
+          <button id="tabBanner" class="tab-btn" type="button" role="tab" aria-selected="false">Banners</button>
+        </div>
+
+        <div id="imageTabPanel" class="tab-panel is-active" role="tabpanel">
+          <div class="tab-panel-scroll">
+            <section class="section">
+              <p class="field-label">Car Model:</p>
+              <div class="car-model-wrap">
+                <button id="carModelToggle" class="car-model-toggle" type="button" aria-expanded="false">
+                  <span id="carModelDisplay" class="car-model-display">Select a car model</span>
+                  <img
+                    id="carModelChevronIcon"
+                    class="car-model-chevron-icon"
+                    src="./assets/icons/ChevronDownM.svg"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
+                <div id="carModelMenu" class="car-model-menu hidden"></div>
+                <div id="carModelCustomWrap" class="car-model-custom hidden">
+                  <input id="carModelCustomInput" class="text-input" type="text" value="" placeholder="Nissan Patrol" />
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <p class="field-label">Color: <span id="colorName" class="field-label-muted">White</span></p>
+              <div class="color-row" id="presetColors"></div>
+            </section>
+
+            <section class="section">
+              <p class="field-label">Angle</p>
+              <div id="angleRow" class="angle-row"></div>
+            </section>
+
+          </div>
+
+          <section class="section section-generate">
+            <button id="generateBtn" class="generate-btn" type="button">Generate</button>
+          </section>
+        </div>
+
+        <div id="bannerTabPanel" class="tab-panel" role="tabpanel" aria-hidden="true">
+          <div class="tab-panel-scroll">
+            <section class="section source-section">
+              <div class="source-left">
+                <p class="field-label">Source Image:</p>
+                <p id="uploadImageStatus" class="source-status">Status</p>
+              </div>
+              <button id="uploadImageBtn" class="upload-icon-btn" type="button" aria-label="Upload image">
+                <img class="upload-icon" src="./assets/icons/Upload.svg" alt="" aria-hidden="true" />
+              </button>
+              <input id="uploadImageInput" class="file-input-hidden" type="file" accept="image/png,image/jpeg,image/webp" />
+            </section>
+
+            <section class="section">
+              <p class="field-label">Layout Type:</p>
+              <div id="layoutTypeRow" class="angle-row"></div>
+            </section>
+
+            <section class="section">
+              <p class="field-label">Image Position:</p>
+              <div class="shift-controls">
+                <div class="shift-block">
+                  <label class="shift-label" for="imageScale">Scale</label>
+                  <input id="imageScale" class="shift-slider" type="range" min="100" max="150" step="3" value="100" />
+                </div>
+                <div class="shift-block">
+                  <label class="shift-label" for="imageShiftX">X (left-right)</label>
+                  <input id="imageShiftX" class="shift-slider shift-slider-steps" type="range" min="-4" max="4" step="1" value="0" />
+                </div>
+                <div class="shift-block">
+                  <label class="shift-label" for="imageShiftY">Y (up-down)</label>
+                  <input id="imageShiftY" class="shift-slider shift-slider-steps" type="range" min="-4" max="4" step="1" value="0" />
+                </div>
+              </div>
+            </section>
+
+            <section class="text-sets-host">
+              <div id="textSetsWrap" class="text-sets-wrap"></div>
+              <button id="addTextSetBtn" class="add-set-btn" type="button" aria-label="Add text set">+</button>
+            </section>
+          </div>
+
+          <section class="section section-generate">
+            <button id="renderBannersBtn" class="generate-btn" type="button">Create Banners</button>
+          </section>
+        </div>
+
+        <input id="customColorInput" type="color" value="#f2cc00" hidden />
+      </aside>
+
+      <section class="canvas">
+        <div class="canvas-top">
+          <button id="topActionBtn" class="canvas-action-btn" type="button">Copy</button>
+        </div>
+
+        <div id="loader" class="loader hidden" aria-live="polite">
+          <span>Generation</span>
+          <span class="dot dot-1">.</span>
+          <span class="dot dot-2">.</span>
+          <span class="dot dot-3">.</span>
+        </div>
+
+        <div id="imageCanvas" class="tab-canvas is-active">
+          <div class="image-workspace">
+            <div id="imagePreviewFrame" class="image-preview-frame hidden">
+              <img id="resultImage" class="result-image" alt="Generated car visual" />
+            </div>
+            <div class="prompt-row hidden">
+              <textarea id="promptInput" class="prompt-input" rows="3" placeholder="nana bananu"></textarea>
+              <button id="promptBackBtn" class="prompt-back-btn" type="button" aria-label="Back to previous generation">←</button>
+              <button id="promptApplyBtn" class="prompt-apply-btn" type="button" aria-label="Apply prompt">↑</button>
+            </div>
+            <div id="promptSuggestions" class="prompt-suggestions hidden" aria-label="Prompt suggestions"></div>
+          </div>
+        </div>
+
+        <div id="bannerCanvas" class="tab-canvas">
+          <div id="bannerSetsView" class="banner-sets-view"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

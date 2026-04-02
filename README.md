@@ -79,7 +79,8 @@ python3 web_app.py
 
 - сервер слушает `PORT`, который Railway подставляет автоматически
 - добавлен healthcheck `GET /health`
-- в [railway.toml](/Users/d-vershinin/Documents/GitHub/Drive_perf/railway.toml) зафиксирована старт-команда `python web_app.py`
+- в [railway.toml](/Users/d-vershinin/Documents/GitHub/Drive_perf/railway.toml) задан деплой через `Dockerfile`, чтобы не зависеть от авто-детекта Railpack
+- в [Dockerfile](/Users/d-vershinin/Documents/GitHub/Drive_perf/Dockerfile) зафиксирована сборка Python-сервиса
 
 Что нужно сделать в Railway:
 
