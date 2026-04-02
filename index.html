@@ -63,14 +63,18 @@
               <div class="source-left">
                 <p class="field-label">Source Image:</p>
                 <p id="uploadImageStatus" class="source-status">Status</p>
-                <div id="selectedSourceBox" class="selected-source hidden">
-                  <img id="selectedSourcePreview" class="selected-source-preview" alt="Selected source image" />
-                  <button id="clearSourceBtn" class="clear-source-btn" type="button" aria-label="Clear selected source">×</button>
-                </div>
               </div>
               <button id="uploadImageBtn" class="upload-icon-btn" type="button" aria-label="Upload image">
                 <img class="upload-icon" src="./assets/icons/Upload.svg" alt="" aria-hidden="true" />
               </button>
+              <div id="selectedSourceBox" class="selected-source hidden">
+                <div class="selected-source-preview-wrap">
+                  <img id="selectedSourcePreview" class="selected-source-preview" alt="Selected source image" />
+                </div>
+                <button id="clearSourceBtn" class="clear-source-btn" type="button" aria-label="Clear selected source">
+                  <span class="clear-source-glyph" aria-hidden="true"></span>
+                </button>
+              </div>
               <input id="uploadImageInput" class="file-input-hidden" type="file" accept="image/png,image/jpeg,image/webp" />
             </section>
 

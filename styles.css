@@ -367,7 +367,6 @@ body {
 .source-section {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
@@ -390,32 +389,71 @@ body {
 .selected-source {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.selected-source-preview-wrap {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #0e0e0e;
+  border-radius: 8px;
+  padding: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .selected-source-preview {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
   object-fit: cover;
   display: block;
   background: rgba(14, 14, 14, 0.12);
 }
 
 .clear-source-btn {
-  width: 22px;
-  height: 22px;
-  border: 1px solid rgba(14, 14, 14, 0.28);
-  border-radius: 999px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #0e0e0e;
+  border-radius: 8px;
   background: transparent;
-  color: #0e0e0e;
-  font-size: 16px;
-  line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.clear-source-glyph {
+  position: relative;
+  width: 4px;
+  height: 4px;
+  display: block;
+}
+
+.clear-source-glyph::before,
+.clear-source-glyph::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 1px;
+  background: #0e0e0e;
+  transform-origin: center;
+  margin-left: -2.5px;
+  margin-top: -0.5px;
+}
+
+.clear-source-glyph::before {
+  transform: rotate(45deg);
+}
+
+.clear-source-glyph::after {
+  transform: rotate(-45deg);
 }
 
 .upload-icon-btn {
