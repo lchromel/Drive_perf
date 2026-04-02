@@ -236,41 +236,6 @@ def _infer_library_kind_from_name(file_name: str) -> str:
     return "uploaded"
 
 
-def _seed_image_library_from_generated_files(records: list[dict]) -> list[dict]:
-    existing_urls = {
-        str(item.get("image_url", "")).strip()
-        for item in records
-        if str(item.get("image_url", "")).strip()
-    }
-    if not GENERATED_DIR.exists():
-        return records
-
-    changed = False
-    for file_path in sorted(GENERATED_DIR.glob("*")):
-        if not file_path.is_file():
-            continue
-        public_url = f"/output/generated/{file_path.name}"
-        if public_url in existing_urls:
-            continue
-        changed = True
-        records.append(
-            {
-                "id": uuid.uuid4().hex,
-                "image_url": public_url,
-                "banner_source_url": "",
-                "kind": _infer_library_kind_from_name(file_path.name),
-                "created_at": datetime.utcfromtimestamp(file_path.stat().st_mtime).replace(microsecond=0).isoformat() + "Z",
-                "label": file_path.stem,
-                "original_name": file_path.name,
-            }
-        )
-        existing_urls.add(public_url)
-
-    if changed:
-        records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
-    return records
-
-
 def _public_image_library_record(record: dict) -> dict:
     image_url = str(record.get("image_url", "")).strip()
     banner_source_url = str(record.get("banner_source_url", "")).strip()
@@ -295,8 +260,6 @@ def _public_image_library_record(record: dict) -> dict:
 def list_image_library() -> list[dict]:
     with IMAGE_LIBRARY_LOCK:
         records = _load_image_library_records_unlocked()
-        records = _seed_image_library_from_generated_files(records)
-        _save_image_library_records_unlocked(records)
         return [_public_image_library_record(item) for item in records]
 
 
@@ -319,7 +282,6 @@ def _upsert_image_library_record(
 
     with IMAGE_LIBRARY_LOCK:
         records = _load_image_library_records_unlocked()
-        records = _seed_image_library_from_generated_files(records)
 
         record = None
         for item in records:
@@ -361,8 +323,6 @@ def get_image_library_record(image_url: str) -> Optional[dict]:
 
     with IMAGE_LIBRARY_LOCK:
         records = _load_image_library_records_unlocked()
-        records = _seed_image_library_from_generated_files(records)
-        _save_image_library_records_unlocked(records)
         for item in records:
             if str(item.get("image_url", "")).strip() == normalized_image_url:
                 return dict(item)
@@ -377,7 +337,6 @@ def update_image_library_banner_source(image_url: str, banner_source_url: str) -
 
     with IMAGE_LIBRARY_LOCK:
         records = _load_image_library_records_unlocked()
-        records = _seed_image_library_from_generated_files(records)
         for item in records:
             if str(item.get("image_url", "")).strip() != normalized_image_url:
                 continue
@@ -385,6 +344,22 @@ def update_image_library_banner_source(image_url: str, banner_source_url: str) -
             _save_image_library_records_unlocked(records)
             return _public_image_library_record(item)
     return None
+
+
+def delete_image_library_record(image_url: str) -> bool:
+    normalized_image_url = str(image_url or "").strip()
+    if not normalized_image_url:
+        return False
+
+    with IMAGE_LIBRARY_LOCK:
+        records = _load_image_library_records_unlocked()
+        filtered_records = [
+            item for item in records if str(item.get("image_url", "")).strip() != normalized_image_url
+        ]
+        if len(filtered_records) == len(records):
+            return False
+        _save_image_library_records_unlocked(filtered_records)
+        return True
 
 
 def load_tokens_from_file() -> None:
@@ -2375,6 +2350,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/render-banners",
             "/api/upload-image",
             "/api/create-banners-zip",
+            "/api/delete-library-image",
         }:
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
             return
@@ -2398,13 +2374,6 @@ class Handler(SimpleHTTPRequestHandler):
                     suggestions_future = executor.submit(generate_edit_suggestions_with_openai, car_model, prompt)
                     image_url, local_image_url = image_future.result()
                     suggestions = suggestions_future.result()
-                library_image = _upsert_image_library_record(
-                    local_image_url,
-                    kind="generated",
-                    prompt=prompt,
-                    car_model=car_model,
-                    color_name=color_name,
-                )
                 self._send_json(
                     HTTPStatus.OK,
                     {
@@ -2412,7 +2381,6 @@ class Handler(SimpleHTTPRequestHandler):
                         "image_local_url": local_image_url,
                         "prompt": prompt,
                         "edit_suggestions": suggestions,
-                        "library_image": library_image,
                     },
                 )
                 return
@@ -2424,12 +2392,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageData is required"})
                     return
                 local_url = _save_uploaded_data_url(image_data, file_name)
-                library_image = _upsert_image_library_record(
-                    local_url,
-                    kind="uploaded",
-                    original_name=file_name,
-                )
-                self._send_json(HTTPStatus.OK, {"image_local_url": local_url, "library_image": library_image})
+                self._send_json(HTTPStatus.OK, {"image_local_url": local_url})
                 return
 
             if self.path == "/api/regenerate-image":
@@ -2438,18 +2401,12 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "prompt is required"})
                     return
                 image_url, local_image_url = generate_image_with_recraft(prompt)
-                library_image = _upsert_image_library_record(
-                    local_image_url,
-                    kind="generated",
-                    prompt=prompt,
-                )
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "image_url": image_url,
                         "image_local_url": local_image_url,
                         "prompt": prompt,
-                        "library_image": library_image,
                     },
                 )
                 return
@@ -2464,13 +2421,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "editPrompt is required"})
                     return
                 edited_local_url = edit_image_with_gemini(image_url, edit_prompt)
-                library_image = _upsert_image_library_record(
-                    edited_local_url,
-                    kind="edited",
-                    edit_prompt=edit_prompt,
-                    source_image_url=image_url,
-                )
-                self._send_json(HTTPStatus.OK, {"image_local_url": edited_local_url, "library_image": library_image})
+                self._send_json(HTTPStatus.OK, {"image_local_url": edited_local_url})
                 return
 
             if self.path == "/api/create-banners-zip":
@@ -2480,6 +2431,18 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 zip_url = create_banners_zip(banner_urls)
                 self._send_json(HTTPStatus.OK, {"zip_url": zip_url})
+                return
+
+            if self.path == "/api/delete-library-image":
+                image_url = str(body.get("imageUrl", "")).strip()
+                if not image_url:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageUrl is required"})
+                    return
+                deleted = delete_image_library_record(image_url)
+                if not deleted:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "Image not found"})
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
                 return
 
             image_url = str(body.get("imageUrl", "")).strip()
@@ -2533,15 +2496,18 @@ class Handler(SimpleHTTPRequestHandler):
             if not banners:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "No supported sizes provided"})
                 return
-            selected_library_image = None
-            if image_url:
-                selected_library_image = get_image_library_record(image_url)
+            library_image = _upsert_image_library_record(
+                image_url,
+                kind=_infer_library_kind_from_name(Path(urlparse(image_url).path).name),
+                banner_source_url=effective_image_url,
+                original_name=Path(urlparse(image_url).path).name,
+            )
             self._send_json(
                 HTTPStatus.OK,
                 {
                     "banners": banners,
                     "source_image_url": effective_image_url,
-                    "library_image": _public_image_library_record(selected_library_image) if selected_library_image else None,
+                    "library_image": library_image,
                 },
             )
         except Exception as exc:

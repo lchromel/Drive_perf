@@ -233,6 +233,32 @@ function applySelectedImage(record, options = {}) {
   renderUiState();
 }
 
+async function deleteLibraryImage(imageUrl) {
+  const targetUrl = String(imageUrl || "").trim();
+  if (!targetUrl) return;
+  try {
+    const response = await fetch("/api/delete-library-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl: targetUrl }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Delete failed");
+    }
+    state.imageLibrary = state.imageLibrary.filter((item) => item.image_url !== targetUrl);
+    if (state.bannerSourceImageUrl === targetUrl) {
+      state.bannerSourceImageUrl = "";
+      state.renderedBanners = [];
+      setSourceStatus("none");
+      renderBannerSetsView();
+    }
+    renderUiState();
+  } catch (error) {
+    alert(`ERROR: ${error.message || "DELETE FAILED"}`);
+  }
+}
+
 function renderSourceLibrary() {
   if (!sourceLibraryEl) return;
   sourceLibraryEl.innerHTML = "";
@@ -256,20 +282,40 @@ function renderSourceLibrary() {
   }
 
   state.imageLibrary.forEach((item) => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "source-card";
+    const card = document.createElement("div");
+    card.className = "source-card-wrap";
+
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.className = "source-card";
     if (state.bannerSourceImageUrl && item.image_url === state.bannerSourceImageUrl) {
-      card.classList.add("is-active");
+      previewBtn.classList.add("is-active");
     }
-    card.setAttribute("aria-label", item.car_model || item.original_name || item.label || "Saved image");
+    previewBtn.setAttribute("aria-label", item.car_model || item.original_name || item.label || "Saved image");
 
     const preview = document.createElement("img");
     preview.className = "source-card-image";
     preview.src = item.image_url;
     preview.alt = item.car_model || item.original_name || item.label || item.kind || "Saved image";
-    card.appendChild(preview);
-    card.addEventListener("click", () => applySelectedImage(item));
+    previewBtn.appendChild(preview);
+    previewBtn.addEventListener("click", () => applySelectedImage(item));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "source-card-delete";
+    deleteBtn.setAttribute("aria-label", "Delete saved image");
+    const deleteGlyph = document.createElement("span");
+    deleteGlyph.className = "source-card-delete-glyph";
+    deleteGlyph.setAttribute("aria-hidden", "true");
+    deleteBtn.appendChild(deleteGlyph);
+    deleteBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteLibraryImage(item.image_url);
+    });
+
+    card.appendChild(previewBtn);
+    card.appendChild(deleteBtn);
     sourceLibraryEl.appendChild(card);
   });
 }
@@ -298,13 +344,12 @@ async function fetchImageLibrary() {
     state.imageLibrary = Array.isArray(payload.images)
       ? payload.images.map((item) => normalizeLibraryImage(item)).filter(Boolean)
       : [];
-    if (!state.bannerSourceImageUrl && state.imageUrl) {
-      state.bannerSourceImageUrl = state.imageUrl;
-    }
     if (state.bannerSourceImageUrl) {
       const selected = findLibraryImageByUrl(state.bannerSourceImageUrl);
       if (selected) {
         setSourceStatusForImage(selected);
+      } else {
+        state.bannerSourceImageUrl = "";
       }
     }
     renderSourceLibrary();
@@ -970,7 +1015,6 @@ async function generatePrompt() {
     if (previousImageUrl && previousImageUrl !== state.imageUrl) {
       pushImageToHistory(previousImageUrl);
     }
-    await fetchImageLibrary();
     setSourceStatus("generated");
   } catch (error) {
     alert(`ERROR: ${error.message || "UNKNOWN ERROR"}`);
@@ -1038,7 +1082,6 @@ async function createBanners() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Render failed");
     state.renderedBanners = (payload.banners || []).filter((item) => item && item.url && item.size);
-    await fetchImageLibrary();
   } catch (error) {
     alert(`ERROR: ${error.message || "UNKNOWN ERROR"}`);
   } finally {
@@ -1144,7 +1187,6 @@ promptApplyBtn.addEventListener("click", () => {
       state.bannerSourceImageUrl = editedUrl;
       state.editPromptText = "";
       state.renderedBanners = [];
-      await fetchImageLibrary();
       setSourceStatus("generated");
       renderBannerSetsView();
     } catch (error) {
@@ -1212,7 +1254,6 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     state.editPromptText = "";
     state.editSuggestions = [];
     state.renderedBanners = [];
-    await fetchImageLibrary();
     setSourceStatus("uploaded");
     renderBannerSetsView();
     renderUiState();

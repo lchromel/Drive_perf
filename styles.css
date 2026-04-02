@@ -933,6 +933,12 @@ body {
   display: block;
 }
 
+.source-card-wrap {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
 .source-card {
   width: 40px;
   height: 40px;
@@ -955,6 +961,51 @@ body {
   object-fit: cover;
   display: block;
   background: rgba(14, 14, 14, 0.12);
+}
+
+.source-card-delete {
+  position: absolute;
+  right: -3px;
+  top: -3px;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #0e0e0e;
+  border-radius: 999px;
+  background: #97a56e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.source-card-delete-glyph {
+  position: relative;
+  width: 6px;
+  height: 6px;
+  display: block;
+}
+
+.source-card-delete-glyph::before,
+.source-card-delete-glyph::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 1px;
+  background: #0e0e0e;
+  transform-origin: center;
+  margin-left: -3px;
+  margin-top: -0.5px;
+}
+
+.source-card-delete-glyph::before {
+  transform: rotate(45deg);
+}
+
+.source-card-delete-glyph::after {
+  transform: rotate(-45deg);
 }
 
 .banner-sets-view {
