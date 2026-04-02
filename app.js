@@ -107,6 +107,7 @@ const state = {
   ],
   bannerStage: "idle",
   bannerRendering: false,
+  hasRenderedBanners: false,
   renderedBanners: [],
   imageScalePercent: 100,
   imageShiftXStep: 0,
@@ -141,6 +142,7 @@ const customColorInput = document.getElementById("customColorInput");
 const generateBtn = document.getElementById("generateBtn");
 
 const loaderEl = document.getElementById("loader");
+const loaderLabelEl = document.getElementById("loaderLabel");
 const imagePreviewFrameEl = document.getElementById("imagePreviewFrame");
 const resultImageEl = document.getElementById("resultImage");
 const promptInputEl = document.getElementById("promptInput");
@@ -226,7 +228,7 @@ function applySelectedImage(record, options = {}) {
   if (!image) return;
   const { closeLibrary = true } = options;
   state.bannerSourceImageUrl = image.image_url;
-  state.renderedBanners = [];
+  invalidateRenderedBanners();
   if (closeLibrary) {
     state.sourceLibraryOpen = false;
   }
@@ -252,7 +254,7 @@ async function deleteLibraryImage(imageUrl) {
     state.imageLibrary = state.imageLibrary.filter((item) => item.image_url !== targetUrl);
     if (state.bannerSourceImageUrl === targetUrl) {
       state.bannerSourceImageUrl = "";
-      state.renderedBanners = [];
+      invalidateRenderedBanners();
       setSourceStatus("none");
       renderBannerSetsView();
     }
@@ -435,8 +437,27 @@ function renderTopAction() {
   }
 }
 
+function invalidateRenderedBanners(resetAutoRenderEligibility = true) {
+  state.renderedBanners = [];
+  if (resetAutoRenderEligibility) {
+    state.hasRenderedBanners = false;
+  }
+}
+
 function renderUiState() {
-  loaderEl.classList.toggle("hidden", !state.generating);
+  const isBusy = state.generating || state.bannerRendering;
+  loaderEl.classList.toggle("hidden", !isBusy);
+  if (loaderLabelEl) {
+    if (state.generating) {
+      loaderLabelEl.textContent = "Generating image";
+    } else if (state.bannerStage === "uncropping") {
+      loaderLabelEl.textContent = "Uncropping";
+    } else if (state.bannerStage === "creating") {
+      loaderLabelEl.textContent = "Creating banners";
+    } else {
+      loaderLabelEl.textContent = "Working";
+    }
+  }
   generateBtn.disabled = state.generating;
   renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
   renderTabs();
@@ -561,7 +582,7 @@ function renderLayoutTypes() {
     chip.addEventListener("click", () => {
       if (layout.disabled) return;
       state.bannerLayout = layout.value;
-      state.renderedBanners = [];
+      invalidateRenderedBanners();
       renderLayoutTypes();
       renderBannerSetsView();
       renderTopAction();
@@ -588,7 +609,7 @@ function renderLayoutTypes() {
     btn.addEventListener("click", () => {
       if (isDisabled) return;
       state.bannerAccentPreset = key;
-      state.renderedBanners = [];
+      invalidateRenderedBanners();
       renderLayoutTypes();
       renderBannerSetsView();
       renderTopAction();
@@ -666,7 +687,7 @@ function renderTextSetsEditor() {
       removeBtn.setAttribute("aria-label", `Remove set ${index + 1}`);
       removeBtn.addEventListener("click", () => {
         state.bannerTextSets.splice(index, 1);
-        state.renderedBanners = [];
+        invalidateRenderedBanners();
         renderTextSetsEditor();
         renderBannerSetsView();
         renderTopAction();
@@ -694,7 +715,7 @@ function renderTextSetsEditor() {
       textarea.addEventListener("input", (event) => {
         autoResizeTextarea(textarea);
         state.bannerTextSets[index][field.key] = event.target.value;
-        state.renderedBanners = [];
+        invalidateRenderedBanners();
         renderBannerSetsView();
         renderTopAction();
       });
@@ -721,7 +742,7 @@ function renderTextSetsEditor() {
     badgeToggleBtn.appendChild(badgeToggleIcon);
     badgeToggleBtn.addEventListener("click", () => {
       state.bannerTextSets[index].badgeEnabled = !Boolean(state.bannerTextSets[index].badgeEnabled);
-      state.renderedBanners = [];
+      invalidateRenderedBanners();
       renderTextSetsEditor();
       renderBannerSetsView();
       renderTopAction();
@@ -750,7 +771,7 @@ function renderTextSetsEditor() {
         textarea.addEventListener("input", (event) => {
           autoResizeTextarea(textarea);
           state.bannerTextSets[index][field.key] = event.target.value;
-          state.renderedBanners = [];
+          invalidateRenderedBanners();
           renderBannerSetsView();
           renderTopAction();
         });
@@ -778,7 +799,7 @@ function renderTextSetsEditor() {
       shiftXInput.addEventListener("input", (event) => {
         state.bannerTextSets[index].badgeShiftX = Math.max(0, Math.min(100, Number(event.target.value) || 0));
         applySliderFill(shiftXInput);
-        state.renderedBanners = [];
+        invalidateRenderedBanners();
         renderBannerSetsView();
         renderTopAction();
       });
@@ -801,7 +822,7 @@ function renderTextSetsEditor() {
       shiftYInput.addEventListener("input", (event) => {
         state.bannerTextSets[index].badgeShiftY = Math.max(0, Math.min(100, Number(event.target.value) || 0));
         applySliderFill(shiftYInput);
-        state.renderedBanners = [];
+        invalidateRenderedBanners();
         renderBannerSetsView();
         renderTopAction();
       });
@@ -830,7 +851,7 @@ function renderTextSetsEditor() {
       btn.appendChild(icon);
       btn.addEventListener("click", () => {
         state.bannerTextSets[index].textAlign = optionDef.value;
-        state.renderedBanners = [];
+        invalidateRenderedBanners();
         renderTextSetsEditor();
         renderBannerSetsView();
         renderTopAction();
@@ -868,7 +889,27 @@ function makeSlot(size, url, isLoading) {
     const ph = document.createElement("div");
     ph.className = "banner-slot-placeholder";
     if (isLoading || !state.renderedBanners.length) {
-      ph.textContent = state.bannerStage === "uncropping" ? "Uncropping..." : "Generation...";
+      const label = document.createElement("span");
+      label.className = "banner-slot-placeholder-label";
+      if (state.bannerStage === "uncropping") {
+        label.textContent = "Uncropping";
+      } else if (state.bannerStage === "creating") {
+        label.textContent = "Creating";
+      } else {
+        label.textContent = "Generation";
+      }
+      ph.appendChild(label);
+      if (isLoading) {
+        const dotsWrap = document.createElement("span");
+        dotsWrap.className = "banner-slot-dots";
+        for (let index = 1; index <= 3; index += 1) {
+          const dot = document.createElement("span");
+          dot.className = `dot dot-${index}`;
+          dot.textContent = ".";
+          dotsWrap.appendChild(dot);
+        }
+        ph.appendChild(dotsWrap);
+      }
     } else {
       ph.textContent = "";
     }
@@ -1069,12 +1110,12 @@ function scheduleBannerAutoRender() {
     clearTimeout(bannerAutoRenderTimer);
     bannerAutoRenderTimer = null;
   }
-  if (!state.bannerSourceImageUrl || state.bannerRendering || !state.renderedBanners.length) {
+  if (!state.bannerSourceImageUrl || state.bannerRendering || !state.hasRenderedBanners) {
     return;
   }
   bannerAutoRenderTimer = setTimeout(() => {
     bannerAutoRenderTimer = null;
-    if (!state.bannerSourceImageUrl || state.bannerRendering || !state.renderedBanners.length) {
+    if (!state.bannerSourceImageUrl || state.bannerRendering || !state.hasRenderedBanners) {
       return;
     }
     createBanners();
@@ -1119,6 +1160,7 @@ async function createBanners() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Render failed");
     state.renderedBanners = (payload.banners || []).filter((item) => item && item.url && item.size);
+    state.hasRenderedBanners = state.renderedBanners.length > 0;
   } catch (error) {
     alert(`ERROR: ${error.message || "UNKNOWN ERROR"}`);
   } finally {
@@ -1225,7 +1267,7 @@ promptApplyBtn.addEventListener("click", () => {
       state.imageUrl = editedUrl;
       state.bannerSourceImageUrl = editedUrl;
       state.editPromptText = "";
-      state.renderedBanners = [];
+      invalidateRenderedBanners();
       setSourceStatus("generated");
       renderBannerSetsView();
     } catch (error) {
@@ -1241,7 +1283,7 @@ renderBannersBtn.addEventListener("click", createBanners);
 
 if (imageShiftXEl) {
   imageShiftXEl.addEventListener("input", (event) => {
-    const hadRenderedBanners = state.renderedBanners.length > 0;
+    const hadRenderedBanners = state.hasRenderedBanners;
     state.imageShiftXStep = clampShiftStep(Number(event.target.value) || 0);
     renderShiftControls();
     state.renderedBanners = [];
@@ -1255,7 +1297,7 @@ if (imageShiftXEl) {
 
 if (imageScaleEl) {
   imageScaleEl.addEventListener("input", (event) => {
-    const hadRenderedBanners = state.renderedBanners.length > 0;
+    const hadRenderedBanners = state.hasRenderedBanners;
     const raw = Number(event.target.value);
     if (!Number.isFinite(raw)) {
       state.imageScalePercent = IMAGE_SCALE_MIN;
@@ -1276,7 +1318,7 @@ if (imageScaleEl) {
 
 if (imageShiftYEl) {
   imageShiftYEl.addEventListener("input", (event) => {
-    const hadRenderedBanners = state.renderedBanners.length > 0;
+    const hadRenderedBanners = state.hasRenderedBanners;
     state.imageShiftYStep = clampShiftStep(Number(event.target.value) || 0);
     renderShiftControls();
     state.renderedBanners = [];
@@ -1304,7 +1346,7 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     state.basePromptText = "";
     state.editPromptText = "";
     state.editSuggestions = [];
-    state.renderedBanners = [];
+    invalidateRenderedBanners();
     setSourceStatus("uploaded");
     renderBannerSetsView();
     renderUiState();
@@ -1342,7 +1384,7 @@ addTextSetBtn.addEventListener("click", () => {
     badgeShiftX: Math.max(0, Math.min(100, Number(sourceSet.badgeShiftX) || 0)),
     badgeShiftY: Math.max(0, Math.min(100, Number(sourceSet.badgeShiftY) || 0)),
   });
-  state.renderedBanners = [];
+  invalidateRenderedBanners();
   renderTextSetsEditor();
   renderBannerSetsView();
   renderTopAction();
@@ -1377,7 +1419,7 @@ if (sourceLibraryToggleEl) {
 if (clearSourceBtnEl) {
   clearSourceBtnEl.addEventListener("click", () => {
     state.bannerSourceImageUrl = "";
-    state.renderedBanners = [];
+    invalidateRenderedBanners();
     setSourceStatus("none");
     renderBannerSetsView();
     renderUiState();
@@ -1424,7 +1466,7 @@ if (promptBackBtn) {
     state.bannerSourceImageUrl = previous;
     state.editPromptText = "";
     state.editSuggestions = [];
-    state.renderedBanners = [];
+    invalidateRenderedBanners();
     setSourceStatusForImage(findLibraryImageByUrl(previous));
     renderBannerSetsView();
     renderUiState();

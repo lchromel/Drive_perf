@@ -319,6 +319,11 @@ body {
   color: #97a56e;
 }
 
+.angle-chip.is-disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
 .layout-accent-row {
   display: flex;
   align-items: flex-end;
@@ -354,6 +359,11 @@ body {
 
 .accent-swatch-btn.is-active {
   border-color: #0e0e0e;
+}
+
+.accent-swatch-btn.is-disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
 }
 
 .accent-swatch-core {
@@ -1089,6 +1099,19 @@ body {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.banner-slot-placeholder-label {
+  display: inline-block;
+}
+
+.banner-slot-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
 }
 
 .banner-set-actions {
