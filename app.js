@@ -89,6 +89,8 @@ const state = {
   imageLibrary: [],
   imageUrl: "",
   bannerSourceImageUrl: "",
+  videoPromptText: "",
+  videoGenerating: false,
   generating: false,
   activeTab: "image",
   sourceLibraryOpen: false,
@@ -127,10 +129,13 @@ const SOURCE_STATUS = {
 
 const tabImageEl = document.getElementById("tabImage");
 const tabBannerEl = document.getElementById("tabBanner");
+const tabVideoEl = document.getElementById("tabVideo");
 const imageTabPanelEl = document.getElementById("imageTabPanel");
 const bannerTabPanelEl = document.getElementById("bannerTabPanel");
+const videoTabPanelEl = document.getElementById("videoTabPanel");
 const imageCanvasEl = document.getElementById("imageCanvas");
 const bannerCanvasEl = document.getElementById("bannerCanvas");
+const videoCanvasEl = document.getElementById("videoCanvas");
 
 const carModelToggleEl = document.getElementById("carModelToggle");
 const carModelDisplayEl = document.getElementById("carModelDisplay");
@@ -159,6 +164,7 @@ const topActionBtn = document.getElementById("topActionBtn");
 const uploadImageInputEl = document.getElementById("uploadImageInput");
 const uploadImageBtnEl = document.getElementById("uploadImageBtn");
 const uploadImageStatusEl = document.getElementById("uploadImageStatus");
+const videoSourceStatusEl = document.getElementById("videoSourceStatus");
 const selectedSourceBoxEl = document.getElementById("selectedSourceBox");
 const selectedSourcePreviewEl = document.getElementById("selectedSourcePreview");
 const clearSourceBtnEl = document.getElementById("clearSourceBtn");
@@ -173,6 +179,8 @@ const textSetsWrapEl = document.getElementById("textSetsWrap");
 const addTextSetBtn = document.getElementById("addTextSetBtn");
 const renderBannersBtn = document.getElementById("renderBannersBtn");
 const bannerSetsViewEl = document.getElementById("bannerSetsView");
+const generateVideoPromptBtnEl = document.getElementById("generateVideoPromptBtn");
+const videoPromptOutputEl = document.getElementById("videoPromptOutput");
 let bannerAutoRenderTimer = null;
 let customAccentTapCount = 0;
 let customAccentTapTimer = null;
@@ -205,6 +213,9 @@ function registerCustomAccentTap() {
 
 function setSourceStatus(kind) {
   uploadImageStatusEl.textContent = SOURCE_STATUS[kind] || SOURCE_STATUS.none;
+  if (videoSourceStatusEl) {
+    videoSourceStatusEl.textContent = SOURCE_STATUS[kind] || SOURCE_STATUS.none;
+  }
 }
 
 function normalizeLibraryImage(item) {
@@ -444,17 +455,32 @@ function renderCarModelControl() {
 
 function renderTabs() {
   const isImageTab = state.activeTab === "image";
+  const isBannerTab = state.activeTab === "banner";
+  const isVideoTab = state.activeTab === "video";
   tabImageEl.classList.toggle("is-active", isImageTab);
-  tabBannerEl.classList.toggle("is-active", !isImageTab);
+  tabBannerEl.classList.toggle("is-active", isBannerTab);
+  if (tabVideoEl) {
+    tabVideoEl.classList.toggle("is-active", isVideoTab);
+  }
   tabImageEl.setAttribute("aria-selected", isImageTab ? "true" : "false");
-  tabBannerEl.setAttribute("aria-selected", isImageTab ? "false" : "true");
+  tabBannerEl.setAttribute("aria-selected", isBannerTab ? "true" : "false");
+  if (tabVideoEl) {
+    tabVideoEl.setAttribute("aria-selected", isVideoTab ? "true" : "false");
+  }
 
   imageTabPanelEl.classList.toggle("is-active", isImageTab);
-  bannerTabPanelEl.classList.toggle("is-active", !isImageTab);
-  bannerTabPanelEl.setAttribute("aria-hidden", isImageTab ? "true" : "false");
+  bannerTabPanelEl.classList.toggle("is-active", isBannerTab);
+  bannerTabPanelEl.setAttribute("aria-hidden", isBannerTab ? "false" : "true");
+  if (videoTabPanelEl) {
+    videoTabPanelEl.classList.toggle("is-active", isVideoTab);
+    videoTabPanelEl.setAttribute("aria-hidden", isVideoTab ? "false" : "true");
+  }
 
   imageCanvasEl.classList.toggle("is-active", isImageTab);
-  bannerCanvasEl.classList.toggle("is-active", !isImageTab);
+  bannerCanvasEl.classList.toggle("is-active", isBannerTab);
+  if (videoCanvasEl) {
+    videoCanvasEl.classList.toggle("is-active", isVideoTab);
+  }
 }
 
 function renderTopAction() {
@@ -462,7 +488,15 @@ function renderTopAction() {
     topActionBtn.classList.toggle("hidden", !state.imageUrl);
     topActionBtn.textContent = "Copy";
     topActionBtn.disabled = state.generating || !(state.basePromptText.trim() || state.imageUrl.trim());
-  } else {
+    return;
+  }
+  if (state.activeTab === "video") {
+    topActionBtn.classList.remove("hidden");
+    topActionBtn.textContent = "Copy";
+    topActionBtn.disabled = state.videoGenerating || !state.videoPromptText.trim();
+    return;
+  }
+  {
     topActionBtn.classList.remove("hidden");
     topActionBtn.textContent = "Download All";
     topActionBtn.disabled = state.bannerRendering || !state.renderedBanners.length;
@@ -477,11 +511,13 @@ function invalidateRenderedBanners(resetAutoRenderEligibility = true) {
 }
 
 function renderUiState() {
-  const isBusy = state.generating || state.bannerRendering;
+  const isBusy = state.generating || state.bannerRendering || state.videoGenerating;
   loaderEl.classList.toggle("hidden", !isBusy);
   if (loaderLabelEl) {
     if (state.generating) {
       loaderLabelEl.textContent = "Generating image";
+    } else if (state.videoGenerating) {
+      loaderLabelEl.textContent = "Generating video prompt";
     } else if (state.bannerStage === "uncropping") {
       loaderLabelEl.textContent = "Uncropping";
     } else if (state.bannerStage === "creating") {
@@ -492,6 +528,10 @@ function renderUiState() {
   }
   generateBtn.disabled = state.generating;
   renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
+  if (generateVideoPromptBtnEl) {
+    generateVideoPromptBtnEl.disabled = state.videoGenerating || !state.imageUrl || !getCurrentCarModel();
+    generateVideoPromptBtnEl.textContent = state.videoGenerating ? "Generating..." : "Generate Video Prompt";
+  }
   renderTabs();
   renderTopAction();
   imagePreviewFrameEl.classList.toggle("hidden", !state.imageUrl);
@@ -505,6 +545,9 @@ function renderUiState() {
   }
   if (promptInputEl.value !== state.editPromptText) {
     promptInputEl.value = state.editPromptText;
+  }
+  if (videoPromptOutputEl && videoPromptOutputEl.value !== state.videoPromptText) {
+    videoPromptOutputEl.value = state.videoPromptText;
   }
   renderSelectedSource();
   renderSourceLibrary();
@@ -1083,6 +1126,7 @@ async function generatePrompt() {
   state.basePromptText = "";
   state.editPromptText = "";
   state.editSuggestions = [];
+  state.videoPromptText = "";
   state.imageUrl = "";
   state.renderedBanners = [];
   setSourceStatus("uploading");
@@ -1218,6 +1262,46 @@ async function createBanners() {
   }
 }
 
+async function generateVideoPrompt() {
+  const currentCarModel = getCurrentCarModel();
+  if (!state.imageUrl) {
+    alert("GENERATE OR UPLOAD IMAGE FIRST");
+    return;
+  }
+  if (!currentCarModel) {
+    alert("PLEASE ENTER CAR MODEL");
+    return;
+  }
+
+  state.videoGenerating = true;
+  renderUiState();
+
+  try {
+    const response = await fetch("/api/generate-video-prompt", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageUrl: state.imageUrl,
+        carModel: currentCarModel,
+        colorName: state.colorLabel,
+        basePrompt: state.basePromptText,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Video prompt generation failed");
+    state.videoPromptText = String(payload.prompt || "").trim();
+    if (!state.videoPromptText) {
+      throw new Error("Empty video prompt returned");
+    }
+  } catch (error) {
+    alert(`ERROR: ${error.message || "VIDEO PROMPT FAILED"}`);
+  } finally {
+    state.videoGenerating = false;
+    renderUiState();
+  }
+}
+
 function setActiveTab(tab) {
   state.activeTab = tab;
   renderUiState();
@@ -1233,6 +1317,9 @@ function setActiveTab(tab) {
 
 tabImageEl.addEventListener("click", () => setActiveTab("image"));
 tabBannerEl.addEventListener("click", () => setActiveTab("banner"));
+if (tabVideoEl) {
+  tabVideoEl.addEventListener("click", () => setActiveTab("video"));
+}
 
 carModelToggleEl.addEventListener("click", () => {
   state.carMenuOpen = !state.carMenuOpen;
@@ -1278,6 +1365,9 @@ if (bannerAccentColorInput) {
 }
 
 generateBtn.addEventListener("click", generatePrompt);
+if (generateVideoPromptBtnEl) {
+  generateVideoPromptBtnEl.addEventListener("click", generateVideoPrompt);
+}
 promptApplyBtn.addEventListener("click", () => {
   (async () => {
     const editPrompt = state.editPromptText.trim();
@@ -1324,6 +1414,7 @@ promptApplyBtn.addEventListener("click", () => {
       state.imageUrl = editedUrl;
       state.bannerSourceImageUrl = editedUrl;
       state.editPromptText = "";
+      state.videoPromptText = "";
       invalidateRenderedBanners();
       setSourceStatus("generated");
       renderBannerSetsView();
@@ -1403,6 +1494,7 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     state.basePromptText = "";
     state.editPromptText = "";
     state.editSuggestions = [];
+    state.videoPromptText = "";
     invalidateRenderedBanners();
     setSourceStatus("uploaded");
     renderBannerSetsView();
@@ -1450,6 +1542,20 @@ addTextSetBtn.addEventListener("click", () => {
 topActionBtn.addEventListener("click", async () => {
   if (state.activeTab === "image") {
     const copyValue = state.basePromptText.trim() || state.imageUrl.trim();
+    if (!copyValue) return;
+    try {
+      await navigator.clipboard.writeText(copyValue);
+      topActionBtn.textContent = "Copied";
+      setTimeout(renderTopAction, 1000);
+    } catch (_e) {
+      topActionBtn.textContent = "Failed";
+      setTimeout(renderTopAction, 1000);
+    }
+    return;
+  }
+
+  if (state.activeTab === "video") {
+    const copyValue = state.videoPromptText.trim();
     if (!copyValue) return;
     try {
       await navigator.clipboard.writeText(copyValue);
@@ -1523,6 +1629,7 @@ if (promptBackBtn) {
     state.bannerSourceImageUrl = previous;
     state.editPromptText = "";
     state.editSuggestions = [];
+    state.videoPromptText = "";
     invalidateRenderedBanners();
     setSourceStatusForImage(findLibraryImageByUrl(previous));
     renderBannerSetsView();

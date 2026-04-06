@@ -85,7 +85,7 @@ body {
 
 .tab-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -890,6 +890,56 @@ body {
   background: rgba(227, 255, 116, 0.09);
   border-color: rgba(227, 255, 116, 0.42);
   color: #e3ff74;
+}
+
+.video-helper-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(14, 14, 14, 0.72);
+}
+
+.video-workspace {
+  min-height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
+.video-prompt-card {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.01);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-prompt-label {
+  margin: 0;
+  color: #f4f1e8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.video-prompt-output {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+  color: #f4f1e8;
+  resize: vertical;
+  padding: 16px;
+  font-size: 14px;
+  line-height: 1.55;
+  font-family: "Yango Group Text", "Arial", sans-serif;
+  outline: none;
+}
+
+.video-prompt-output::placeholder {
+  color: rgba(244, 241, 232, 0.42);
 }
 
 .source-library-header {

@@ -651,6 +651,73 @@ def generate_edit_suggestions_with_openai(car_model: str, base_prompt: str) -> l
     return _fallback_edit_suggestions(car_model)
 
 
+def generate_video_prompt_with_openai(
+    car_model: str,
+    image_url: str,
+    color_name: str = "",
+    base_prompt: str = "",
+) -> str:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    client = OpenAI(api_key=api_key)
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    car = str(car_model or "").strip() or "car"
+    color = str(color_name or "").strip() or "unspecified"
+    image = str(image_url or "").strip()
+    base = str(base_prompt or "").strip()
+    if not image:
+        raise RuntimeError("image_url is required")
+    image_data_url = _image_input_data_url_from_url(image)
+
+    response = client.responses.create(
+        model=model,
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "You write premium cinematic vehicle-video prompts for Kling 3.0. "
+                    "Output only one final prompt in English. "
+                    "The prompt must be production-ready and based on the reference image plus the provided car model. "
+                    "Preserve the visible car identity, color family, body style, and premium tone from the image. "
+                    "Write exactly six scenes labeled Scene 1 through Scene 6, then finish with one Style line. "
+                    "Each scene must be 1-2 sentences and specify camera placement, movement, motion feel, environment, lighting, and emotional tone. "
+                    "Keep the video realistic, expensive, and commercially strong. "
+                    "No markdown, no bullet points, no JSON, no explanations."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Create a Kling 3.0 video generation prompt for this car photo. "
+                            f"Car model: {car}. "
+                            f"Color name: {color}. "
+                            "Build a high-end automotive commercial with six scenes. "
+                            "Favor a modern premium city world unless the image clearly suggests another environment. "
+                            "Vary the scenes across: ultra-low tracking shot, macro detail shot, side tracking shot, interior cabin shot, aerial or drone hero motion, and final hero stop. "
+                            "Keep the car moving in most scenes and keep the world physically believable. "
+                            "Prefer bright daylight or refined city light by default, not golden hour, unless the reference image strongly suggests otherwise. "
+                            f"Base image prompt for context: {base or 'not provided'}"
+                        ),
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": image_data_url,
+                    },
+                ],
+            },
+        ],
+    )
+    prompt = (response.output_text or "").strip()
+    if not prompt:
+        raise RuntimeError("OpenAI returned an empty video prompt")
+    return prompt
+
+
 def _save_generated_image_bytes(image_bytes: bytes, *, prefix: str = "generated") -> str:
     _ensure_output_directories()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -814,6 +881,15 @@ def _read_image_bytes_from_url(url: str) -> bytes:
         return local_path.read_bytes()
 
     return _download_remote_bytes(url)
+
+
+def _image_input_data_url_from_url(url: str) -> str:
+    raw = _read_image_bytes_from_url(url)
+    image = Image.open(BytesIO(raw)).convert("RGB")
+    buf = BytesIO()
+    image.save(buf, format="PNG", optimize=True)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def _encode_multipart_form_data(fields: list[tuple[str, str]], files: list[tuple[str, str, bytes, str]]) -> tuple[bytes, str]:
@@ -2403,6 +2479,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path not in {
             "/api/generate-image",
+            "/api/generate-video-prompt",
             "/api/regenerate-image",
             "/api/edit-image",
             "/api/render-banners",
@@ -2462,6 +2539,26 @@ class Handler(SimpleHTTPRequestHandler):
                         "edit_suggestions": suggestions,
                     },
                 )
+                return
+
+            if self.path == "/api/generate-video-prompt":
+                image_url = str(body.get("imageUrl", "")).strip()
+                car_model = str(body.get("carModel", "")).strip()
+                color_name = str(body.get("colorName", "")).strip()
+                base_prompt = str(body.get("basePrompt", "")).strip()
+                if not image_url:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageUrl is required"})
+                    return
+                if not car_model:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "carModel is required"})
+                    return
+                prompt = generate_video_prompt_with_openai(
+                    car_model=car_model,
+                    image_url=image_url,
+                    color_name=color_name,
+                    base_prompt=base_prompt,
+                )
+                self._send_json(HTTPStatus.OK, {"prompt": prompt})
                 return
 
             if self.path == "/api/upload-image":
