@@ -8,6 +8,7 @@ import binascii
 import hmac
 import re
 import threading
+import time
 import zipfile
 import hashlib
 import uuid
@@ -42,6 +43,7 @@ OUTPUT_DIR = ROOT / "output" / "banners"
 GENERATED_DIR = ROOT / "output" / "generated"
 ZIP_DIR = ROOT / "output" / "archives"
 UNCROP_DIR = ROOT / "output" / "uncrop"
+VIDEO_DIR = ROOT / "output" / "videos"
 IMAGE_LIBRARY_FILE = ROOT / "output" / "image_library.json"
 IMAGE_LIBRARY_LOCK = threading.Lock()
 WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
@@ -227,6 +229,7 @@ def _ensure_output_directories() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ZIP_DIR.mkdir(parents=True, exist_ok=True)
     UNCROP_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_LIBRARY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -716,6 +719,183 @@ def generate_video_prompt_with_openai(
     if not prompt:
         raise RuntimeError("OpenAI returned an empty video prompt")
     return prompt
+
+
+def _closest_video_aspect_ratio_for_image(image_url: str) -> str:
+    try:
+        raw = _read_image_bytes_from_url(image_url)
+        with Image.open(BytesIO(raw)) as image:
+            width, height = image.size
+    except Exception:
+        return "16:9"
+
+    if width <= 0 or height <= 0:
+        return "16:9"
+
+    target = width / height
+    candidates = {
+        "16:9": 16 / 9,
+        "9:16": 9 / 16,
+        "1:1": 1.0,
+        "4:5": 4 / 5,
+        "5:4": 5 / 4,
+    }
+    return min(candidates, key=lambda key: abs(candidates[key] - target))
+
+
+def _walk_json_values(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key, value
+            yield from _walk_json_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_json_values(item)
+
+
+def _extract_kling_task_id(payload: dict) -> str:
+    for key, value in _walk_json_values(payload):
+        if str(key).lower() in {"task_id", "taskid"} and isinstance(value, str) and value.strip():
+            return value.strip()
+    for key, value in _walk_json_values(payload):
+        if str(key).lower() == "id" and isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_kling_status(payload: dict) -> str:
+    for key, value in _walk_json_values(payload):
+        if str(key).lower() in {"status", "state", "task_status"} and isinstance(value, str):
+            return value.strip().lower()
+    return ""
+
+
+def _extract_kling_video_url(payload: dict) -> str:
+    preferred_keys = {
+        "video_url",
+        "video",
+        "play_url",
+        "download_url",
+        "result_url",
+        "url",
+        "src",
+    }
+    for key, value in _walk_json_values(payload):
+        key_name = str(key).lower()
+        if key_name not in preferred_keys:
+            continue
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            lower = value.lower()
+            if any(ext in lower for ext in (".mp4", ".mov", ".webm", "video")):
+                return value
+    for _key, value in _walk_json_values(payload):
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            lower = value.lower()
+            if any(ext in lower for ext in (".mp4", ".mov", ".webm")):
+                return value
+    return ""
+
+
+def _save_generated_video_local(remote_url: str) -> str:
+    _ensure_output_directories()
+    raw = _download_remote_bytes(remote_url)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    parsed = urlparse(remote_url)
+    ext = Path(parsed.path).suffix.lower()
+    if ext not in {".mp4", ".mov", ".webm"}:
+        ext = ".mp4"
+    file_name = f"video_{stamp}{ext}"
+    file_path = VIDEO_DIR / file_name
+    file_path.write_bytes(raw)
+    return f"/output/videos/{file_name}"
+
+
+def _kling_headers() -> dict:
+    api_key = os.getenv("KLING_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("KLING_API_KEY is not set")
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _kling_create_image_to_video_task(image_url: str, prompt: str) -> str:
+    base_url = os.getenv("KLING_BASE_URL", "https://api.klingapi.com").rstrip("/")
+    model = os.getenv("KLING_MODEL", "kling-v3-pro").strip() or "kling-v3-pro"
+    duration = int(os.getenv("KLING_DURATION", "5") or "5")
+    if duration not in {5, 10}:
+        duration = 5
+    aspect_ratio = _closest_video_aspect_ratio_for_image(image_url)
+    image_data_url = _image_input_data_url_from_url(image_url)
+    headers = _kling_headers()
+    endpoint = f"{base_url}/v1/videos/image2video"
+
+    payload_candidates = [
+        {
+            "model": model,
+            "prompt": prompt,
+            "image_url": image_data_url,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "mode": "professional",
+        },
+        {
+            "model": model,
+            "prompt": prompt,
+            "image": image_data_url,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "mode": "professional",
+        },
+        {
+            "model": model,
+            "prompt": prompt,
+            "input_image": image_data_url,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "mode": "professional",
+        },
+    ]
+
+    last_error: Optional[Exception] = None
+    for payload in payload_candidates:
+        try:
+            response = _request_json(endpoint, "POST", headers, payload)
+            task_id = _extract_kling_task_id(response)
+            if task_id:
+                return task_id
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise RuntimeError(f"Kling task creation failed: {last_error}") from last_error
+    raise RuntimeError("Kling task creation failed: no task_id returned")
+
+
+def _kling_get_task(task_id: str) -> dict:
+    base_url = os.getenv("KLING_BASE_URL", "https://api.klingapi.com").rstrip("/")
+    headers = _kling_headers()
+    return _request_json(f"{base_url}/v1/videos/{task_id}", "GET", headers)
+
+
+def generate_video_with_kling(image_url: str, prompt: str) -> tuple[str, str]:
+    task_id = _kling_create_image_to_video_task(image_url=image_url, prompt=prompt)
+    timeout_seconds = int(os.getenv("KLING_TIMEOUT_SECONDS", "240") or "240")
+    poll_interval = float(os.getenv("KLING_POLL_INTERVAL_SECONDS", "5") or "5")
+    started = time.time()
+
+    while time.time() - started < timeout_seconds:
+        payload = _kling_get_task(task_id)
+        status = _extract_kling_status(payload)
+        video_url = _extract_kling_video_url(payload)
+        if video_url:
+            return video_url, _save_generated_video_local(video_url)
+        if status in {"failed", "error", "canceled", "cancelled"}:
+            raise RuntimeError(f"Kling generation failed with status: {status}")
+        time.sleep(max(1.0, poll_interval))
+
+    raise RuntimeError("Kling generation timed out")
 
 
 def _save_generated_image_bytes(image_bytes: bytes, *, prefix: str = "generated") -> str:
@@ -2480,6 +2660,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path not in {
             "/api/generate-image",
             "/api/generate-video-prompt",
+            "/api/generate-video",
             "/api/regenerate-image",
             "/api/edit-image",
             "/api/render-banners",
@@ -2559,6 +2740,25 @@ class Handler(SimpleHTTPRequestHandler):
                     base_prompt=base_prompt,
                 )
                 self._send_json(HTTPStatus.OK, {"prompt": prompt})
+                return
+
+            if self.path == "/api/generate-video":
+                image_url = str(body.get("imageUrl", "")).strip()
+                prompt = str(body.get("prompt", "")).strip()
+                if not image_url:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageUrl is required"})
+                    return
+                if not prompt:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "prompt is required"})
+                    return
+                video_url, local_video_url = generate_video_with_kling(image_url=image_url, prompt=prompt)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "video_url": video_url,
+                        "video_local_url": local_video_url,
+                    },
+                )
                 return
 
             if self.path == "/api/upload-image":

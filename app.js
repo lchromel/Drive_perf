@@ -91,6 +91,9 @@ const state = {
   bannerSourceImageUrl: "",
   videoPromptText: "",
   videoGenerating: false,
+  videoRendering: false,
+  videoRenderStatus: "No video yet.",
+  videoResultUrl: "",
   generating: false,
   activeTab: "image",
   sourceLibraryOpen: false,
@@ -180,7 +183,12 @@ const addTextSetBtn = document.getElementById("addTextSetBtn");
 const renderBannersBtn = document.getElementById("renderBannersBtn");
 const bannerSetsViewEl = document.getElementById("bannerSetsView");
 const generateVideoPromptBtnEl = document.getElementById("generateVideoPromptBtn");
+const generateVideoBtnEl = document.getElementById("generateVideoBtn");
 const videoPromptOutputEl = document.getElementById("videoPromptOutput");
+const videoRenderStatusEl = document.getElementById("videoRenderStatus");
+const videoResultWrapEl = document.getElementById("videoResultWrap");
+const videoResultPlayerEl = document.getElementById("videoResultPlayer");
+const videoDownloadLinkEl = document.getElementById("videoDownloadLink");
 let bannerAutoRenderTimer = null;
 let customAccentTapCount = 0;
 let customAccentTapTimer = null;
@@ -493,7 +501,7 @@ function renderTopAction() {
   if (state.activeTab === "video") {
     topActionBtn.classList.remove("hidden");
     topActionBtn.textContent = "Copy";
-    topActionBtn.disabled = state.videoGenerating || !state.videoPromptText.trim();
+    topActionBtn.disabled = state.videoGenerating || state.videoRendering || !state.videoPromptText.trim();
     return;
   }
   {
@@ -511,11 +519,13 @@ function invalidateRenderedBanners(resetAutoRenderEligibility = true) {
 }
 
 function renderUiState() {
-  const isBusy = state.generating || state.bannerRendering || state.videoGenerating;
+  const isBusy = state.generating || state.bannerRendering || state.videoGenerating || state.videoRendering;
   loaderEl.classList.toggle("hidden", !isBusy);
   if (loaderLabelEl) {
     if (state.generating) {
       loaderLabelEl.textContent = "Generating image";
+    } else if (state.videoRendering) {
+      loaderLabelEl.textContent = "Generating video";
     } else if (state.videoGenerating) {
       loaderLabelEl.textContent = "Generating video prompt";
     } else if (state.bannerStage === "uncropping") {
@@ -529,8 +539,13 @@ function renderUiState() {
   generateBtn.disabled = state.generating;
   renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
   if (generateVideoPromptBtnEl) {
-    generateVideoPromptBtnEl.disabled = state.videoGenerating || !state.imageUrl || !getCurrentCarModel();
+    generateVideoPromptBtnEl.disabled =
+      state.videoGenerating || state.videoRendering || !state.imageUrl || !getCurrentCarModel();
     generateVideoPromptBtnEl.textContent = state.videoGenerating ? "Generating..." : "Generate Video Prompt";
+  }
+  if (generateVideoBtnEl) {
+    generateVideoBtnEl.disabled = state.videoGenerating || state.videoRendering || !state.imageUrl || !getCurrentCarModel();
+    generateVideoBtnEl.textContent = state.videoRendering ? "Generating Video..." : "Generate Video";
   }
   renderTabs();
   renderTopAction();
@@ -548,6 +563,25 @@ function renderUiState() {
   }
   if (videoPromptOutputEl && videoPromptOutputEl.value !== state.videoPromptText) {
     videoPromptOutputEl.value = state.videoPromptText;
+  }
+  if (videoRenderStatusEl) {
+    videoRenderStatusEl.textContent = state.videoRenderStatus;
+  }
+  if (videoResultWrapEl && videoResultPlayerEl && videoDownloadLinkEl) {
+    const hasVideo = Boolean(state.videoResultUrl);
+    videoResultWrapEl.classList.toggle("hidden", !hasVideo);
+    if (hasVideo) {
+      if (videoResultPlayerEl.getAttribute("src") !== state.videoResultUrl) {
+        videoResultPlayerEl.src = state.videoResultUrl;
+      }
+      videoDownloadLinkEl.href = state.videoResultUrl;
+      videoDownloadLinkEl.classList.remove("hidden");
+    } else {
+      videoResultPlayerEl.removeAttribute("src");
+      videoResultPlayerEl.load();
+      videoDownloadLinkEl.removeAttribute("href");
+      videoDownloadLinkEl.classList.add("hidden");
+    }
   }
   renderSelectedSource();
   renderSourceLibrary();
@@ -1127,6 +1161,8 @@ async function generatePrompt() {
   state.editPromptText = "";
   state.editSuggestions = [];
   state.videoPromptText = "";
+  state.videoRenderStatus = "No video yet.";
+  state.videoResultUrl = "";
   state.imageUrl = "";
   state.renderedBanners = [];
   setSourceStatus("uploading");
@@ -1302,6 +1338,61 @@ async function generateVideoPrompt() {
   }
 }
 
+async function ensureVideoPromptReady() {
+  const current = String(state.videoPromptText || "").trim();
+  if (current) return current;
+  await generateVideoPrompt();
+  return String(state.videoPromptText || "").trim();
+}
+
+async function generateVideoFromPrompt() {
+  const currentCarModel = getCurrentCarModel();
+  if (!state.imageUrl) {
+    alert("GENERATE OR UPLOAD IMAGE FIRST");
+    return;
+  }
+  if (!currentCarModel) {
+    alert("PLEASE ENTER CAR MODEL");
+    return;
+  }
+
+  const prompt = await ensureVideoPromptReady();
+  if (!prompt) {
+    alert("GENERATE VIDEO PROMPT FIRST");
+    return;
+  }
+
+  state.videoRendering = true;
+  state.videoRenderStatus = "Submitting to Kling 3.0...";
+  state.videoResultUrl = "";
+  renderUiState();
+
+  try {
+    const response = await fetch("/api/generate-video", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageUrl: state.imageUrl,
+        prompt,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Video generation failed");
+    state.videoResultUrl = String(payload.video_local_url || payload.video_url || "").trim();
+    state.videoRenderStatus = state.videoResultUrl ? "Video ready." : "Video generated.";
+    if (!state.videoResultUrl) {
+      throw new Error("Video URL missing");
+    }
+  } catch (error) {
+    state.videoRenderStatus = "Video generation failed.";
+    alert(`ERROR: ${error.message || "VIDEO GENERATION FAILED"}`);
+  } finally {
+    state.videoRendering = false;
+    renderUiState();
+  }
+}
+
 function setActiveTab(tab) {
   state.activeTab = tab;
   renderUiState();
@@ -1368,6 +1459,9 @@ generateBtn.addEventListener("click", generatePrompt);
 if (generateVideoPromptBtnEl) {
   generateVideoPromptBtnEl.addEventListener("click", generateVideoPrompt);
 }
+if (generateVideoBtnEl) {
+  generateVideoBtnEl.addEventListener("click", generateVideoFromPrompt);
+}
 promptApplyBtn.addEventListener("click", () => {
   (async () => {
     const editPrompt = state.editPromptText.trim();
@@ -1415,6 +1509,8 @@ promptApplyBtn.addEventListener("click", () => {
       state.bannerSourceImageUrl = editedUrl;
       state.editPromptText = "";
       state.videoPromptText = "";
+      state.videoRenderStatus = "No video yet.";
+      state.videoResultUrl = "";
       invalidateRenderedBanners();
       setSourceStatus("generated");
       renderBannerSetsView();
@@ -1495,6 +1591,8 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     state.editPromptText = "";
     state.editSuggestions = [];
     state.videoPromptText = "";
+    state.videoRenderStatus = "No video yet.";
+    state.videoResultUrl = "";
     invalidateRenderedBanners();
     setSourceStatus("uploaded");
     renderBannerSetsView();
@@ -1620,6 +1718,12 @@ promptInputEl.addEventListener("input", (event) => {
   state.editPromptText = event.target.value;
 });
 
+if (videoPromptOutputEl) {
+  videoPromptOutputEl.addEventListener("input", (event) => {
+    state.videoPromptText = event.target.value;
+  });
+}
+
 if (promptBackBtn) {
   promptBackBtn.addEventListener("click", () => {
     if (!state.imageHistory.length) return;
@@ -1630,6 +1734,8 @@ if (promptBackBtn) {
     state.editPromptText = "";
     state.editSuggestions = [];
     state.videoPromptText = "";
+    state.videoRenderStatus = "No video yet.";
+    state.videoResultUrl = "";
     invalidateRenderedBanners();
     setSourceStatusForImage(findLibraryImageByUrl(previous));
     renderBannerSetsView();

@@ -942,6 +942,50 @@ body {
   color: rgba(244, 241, 232, 0.42);
 }
 
+.section-generate-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.generate-btn-secondary {
+  background: transparent;
+  color: var(--text-dark);
+  box-shadow: inset 0 0 0 1px rgba(14, 14, 14, 0.16);
+}
+
+.generate-btn-secondary:disabled {
+  opacity: 0.45;
+}
+
+.video-result-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-result-player {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #050505;
+}
+
+.video-download-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f4f1e8;
+  text-decoration: none;
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .source-library-header {
   display: flex;
   align-items: center;
