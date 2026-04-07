@@ -90,6 +90,8 @@ const state = {
   imageUrl: "",
   bannerSourceImageUrl: "",
   videoPromptText: "",
+  videoLibrary: [],
+  videoLibraryOpen: false,
   videoGenerating: false,
   videoRendering: false,
   videoRenderStatus: "No video yet.",
@@ -193,6 +195,9 @@ const videoResultWrapEl = document.getElementById("videoResultWrap");
 const videoResultPlayerEl = document.getElementById("videoResultPlayer");
 const videoDownloadLinkEl = document.getElementById("videoDownloadLink");
 const videoEmptyStateEl = document.getElementById("videoEmptyState");
+const videoLibraryEl = document.getElementById("videoLibrary");
+const videoLibraryToggleEl = document.getElementById("videoLibraryToggle");
+const videoLibraryChevronEl = document.getElementById("videoLibraryChevron");
 const videoHeadline1El = document.getElementById("videoHeadline1");
 const videoHeadline2El = document.getElementById("videoHeadline2");
 const videoHeadline3El = document.getElementById("videoHeadline3");
@@ -255,10 +260,33 @@ function normalizeLibraryImage(item) {
   };
 }
 
+function normalizeLibraryVideo(item) {
+  if (!item || typeof item !== "object") return null;
+  const videoUrl = String(item.video_url || "").trim();
+  if (!videoUrl) return null;
+  return {
+    id: String(item.id || videoUrl),
+    video_url: videoUrl,
+    created_at: String(item.created_at || "").trim(),
+    source_image_url: String(item.source_image_url || "").trim(),
+    prompt: String(item.prompt || "").trim(),
+    label: String(item.label || "").trim(),
+    headlines: Array.isArray(item.headlines)
+      ? item.headlines.map((value) => String(value || "").trim()).filter(Boolean)
+      : [],
+  };
+}
+
 function findLibraryImageByUrl(url) {
   const target = String(url || "").trim();
   if (!target) return null;
   return state.imageLibrary.find((item) => item.image_url === target) || null;
+}
+
+function findLibraryVideoByUrl(url) {
+  const target = String(url || "").trim();
+  if (!target) return null;
+  return state.videoLibrary.find((item) => item.video_url === target) || null;
 }
 
 function setSourceStatusForImage(record) {
@@ -315,6 +343,46 @@ async function deleteLibraryImage(imageUrl) {
       invalidateRenderedBanners();
       setSourceStatus("none");
       renderBannerSetsView();
+    }
+    renderUiState();
+  } catch (error) {
+    alert(`ERROR: ${error.message || "DELETE FAILED"}`);
+  }
+}
+
+function applySelectedVideo(record, options = {}) {
+  const video = normalizeLibraryVideo(record);
+  if (!video) return;
+  const { closeLibrary = true } = options;
+  state.videoResultUrl = video.video_url;
+  state.videoRenderStatus = "Saved video ready.";
+  if (video.headlines.length) {
+    state.videoHeadlines = [video.headlines[0] || "", video.headlines[1] || "", video.headlines[2] || ""];
+  }
+  if (closeLibrary) {
+    state.videoLibraryOpen = false;
+  }
+  renderUiState();
+}
+
+async function deleteLibraryVideo(videoUrl) {
+  const targetUrl = String(videoUrl || "").trim();
+  if (!targetUrl) return;
+  try {
+    const response = await fetch("/api/delete-library-video", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoUrl: targetUrl }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Delete failed");
+    }
+    state.videoLibrary = state.videoLibrary.filter((item) => item.video_url !== targetUrl);
+    if (state.videoResultUrl === targetUrl) {
+      state.videoResultUrl = "";
+      state.videoRenderStatus = "No video yet.";
     }
     renderUiState();
   } catch (error) {
@@ -383,6 +451,70 @@ function renderSourceLibrary() {
   });
 }
 
+function renderVideoLibrary() {
+  if (!videoLibraryEl) return;
+  videoLibraryEl.innerHTML = "";
+  videoLibraryEl.classList.toggle("hidden", !state.videoLibraryOpen || !state.videoLibrary.length);
+  if (videoLibraryToggleEl) {
+    videoLibraryToggleEl.disabled = !state.videoLibrary.length;
+    videoLibraryToggleEl.setAttribute("aria-expanded", state.videoLibraryOpen ? "true" : "false");
+  }
+  if (videoLibraryChevronEl) {
+    videoLibraryChevronEl.src = state.videoLibraryOpen
+      ? "./assets/icons/ChevronUpM.svg"
+      : "./assets/icons/ChevronDownM.svg";
+  }
+
+  if (!state.videoLibrary.length) {
+    const empty = document.createElement("p");
+    empty.className = "source-library-empty";
+    empty.textContent = "No saved videos yet.";
+    videoLibraryEl.appendChild(empty);
+    return;
+  }
+
+  state.videoLibrary.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "source-card-wrap";
+
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.className = "source-card";
+    if (state.videoResultUrl && item.video_url === state.videoResultUrl) {
+      previewBtn.classList.add("is-active");
+    }
+    previewBtn.setAttribute("aria-label", item.label || "Saved video");
+
+    const preview = document.createElement("video");
+    preview.className = "source-card-video";
+    preview.src = item.video_url;
+    preview.muted = true;
+    preview.playsInline = true;
+    preview.preload = "metadata";
+    preview.setAttribute("aria-hidden", "true");
+    previewBtn.appendChild(preview);
+    previewBtn.addEventListener("click", () => applySelectedVideo(item));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "source-card-delete";
+    deleteBtn.setAttribute("aria-label", "Delete saved video");
+    const deleteGlyph = document.createElement("span");
+    deleteGlyph.className = "source-card-delete-glyph";
+    deleteGlyph.setAttribute("aria-hidden", "true");
+    deleteBtn.appendChild(deleteGlyph);
+    deleteBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteLibraryVideo(item.video_url);
+    });
+
+    card.appendChild(previewBtn);
+    card.appendChild(deleteBtn);
+    videoLibraryEl.appendChild(card);
+  });
+}
+
 function renderSelectedSource() {
   if (!selectedSourceBoxEl || !selectedSourcePreviewEl) return;
   const selected = findLibraryImageByUrl(state.bannerSourceImageUrl);
@@ -418,6 +550,29 @@ async function fetchImageLibrary() {
       }
     }
     renderSourceLibrary();
+    renderUiState();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function fetchVideoLibrary() {
+  try {
+    const response = await fetch("/api/library-videos", {
+      credentials: "same-origin",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load saved videos");
+    }
+    state.videoLibrary = Array.isArray(payload.videos)
+      ? payload.videos.map((item) => normalizeLibraryVideo(item)).filter(Boolean)
+      : [];
+    if (state.videoResultUrl && !findLibraryVideoByUrl(state.videoResultUrl)) {
+      state.videoResultUrl = "";
+      state.videoRenderStatus = "No video yet.";
+    }
+    renderVideoLibrary();
     renderUiState();
   } catch (error) {
     console.error(error);
@@ -595,6 +750,7 @@ function renderUiState() {
   }
   renderSelectedSource();
   renderSourceLibrary();
+  renderVideoLibrary();
 }
 
 function pushImageToHistory(url) {
@@ -1395,6 +1551,10 @@ async function generateVideoFromPrompt() {
     if (!state.videoResultUrl) {
       throw new Error("Video URL missing");
     }
+    const savedVideo = normalizeLibraryVideo(payload.library_video);
+    if (savedVideo) {
+      state.videoLibrary = [savedVideo, ...state.videoLibrary.filter((item) => item.video_url !== savedVideo.video_url)];
+    }
   } catch (error) {
     state.videoRenderStatus = "Video generation failed.";
     alert(`ERROR: ${error.message || "VIDEO GENERATION FAILED"}`);
@@ -1685,6 +1845,14 @@ if (sourceLibraryToggleEl) {
   });
 }
 
+if (videoLibraryToggleEl) {
+  videoLibraryToggleEl.addEventListener("click", () => {
+    if (!state.videoLibrary.length) return;
+    state.videoLibraryOpen = !state.videoLibraryOpen;
+    renderUiState();
+  });
+}
+
 if (clearSourceBtnEl) {
   clearSourceBtnEl.addEventListener("click", () => {
     state.bannerSourceImageUrl = "";
@@ -1708,6 +1876,7 @@ renderBannerSetsView();
 renderPromptSuggestions();
 renderUiState();
 fetchImageLibrary();
+fetchVideoLibrary();
 
 window.addEventListener("resize", () => {
   if (state.activeTab === "banner") {

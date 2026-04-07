@@ -158,6 +158,29 @@
             </section>
 
             <section class="section">
+              <div class="source-library-header">
+                <p class="field-label">Saved Videos:</p>
+                <button
+                  id="videoLibraryToggle"
+                  class="source-library-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="videoLibrary"
+                >
+                  <span>Choose Video</span>
+                  <img
+                    id="videoLibraryChevron"
+                    class="source-library-chevron"
+                    src="./assets/icons/ChevronDownM.svg"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
+              <div id="videoLibrary" class="source-library hidden"></div>
+            </section>
+
+            <section class="section">
               <p class="field-label">Titles:</p>
               <div class="video-title-grid">
                 <label class="video-title-item">

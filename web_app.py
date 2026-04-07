@@ -51,6 +51,8 @@ VIDEO_DIR = ROOT / "output" / "videos"
 DEFAULT_PACKSHOT_VIDEO = ROOT / "assets" / "video" / "packshot.mp4"
 IMAGE_LIBRARY_FILE = ROOT / "output" / "image_library.json"
 IMAGE_LIBRARY_LOCK = threading.Lock()
+VIDEO_LIBRARY_FILE = ROOT / "output" / "video_library.json"
+VIDEO_LIBRARY_LOCK = threading.Lock()
 WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
 WEB_APP_BASIC_AUTH_PASSWORD = os.getenv("WEB_APP_BASIC_AUTH_PASSWORD", "")
 AUTH_COOKIE_NAME = "drive_perf_auth"
@@ -397,6 +399,113 @@ def delete_image_library_record(image_url: str) -> bool:
         if len(filtered_records) == len(records):
             return False
         _save_image_library_records_unlocked(filtered_records)
+        return True
+
+
+def _load_video_library_records_unlocked() -> list[dict]:
+    _ensure_output_directories()
+    if not VIDEO_LIBRARY_FILE.exists():
+        return []
+    try:
+        raw = json.loads(VIDEO_LIBRARY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _save_video_library_records_unlocked(records: list[dict]) -> None:
+    _ensure_output_directories()
+    temp_path = VIDEO_LIBRARY_FILE.with_suffix(".tmp")
+    temp_path.write_text(
+        json.dumps(records, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(VIDEO_LIBRARY_FILE)
+
+
+def _public_video_library_record(record: dict) -> dict:
+    return {
+        "id": str(record.get("id", "")).strip(),
+        "video_url": str(record.get("video_url", "")).strip(),
+        "created_at": str(record.get("created_at", "")).strip(),
+        "source_image_url": str(record.get("source_image_url", "")).strip(),
+        "prompt": str(record.get("prompt", "")).strip(),
+        "label": str(record.get("label", "")).strip(),
+        "headlines": [
+            str(item or "").strip()
+            for item in record.get("headlines", [])
+            if str(item or "").strip()
+        ],
+    }
+
+
+def list_video_library() -> list[dict]:
+    with VIDEO_LIBRARY_LOCK:
+        records = _load_video_library_records_unlocked()
+        return [_public_video_library_record(item) for item in records]
+
+
+def _upsert_video_library_record(
+    video_url: str,
+    *,
+    source_image_url: str = "",
+    prompt: str = "",
+    headlines: Optional[list[str]] = None,
+    label: str = "",
+) -> dict:
+    normalized_video_url = str(video_url or "").strip()
+    if not normalized_video_url:
+        raise ValueError("video_url is required")
+
+    with VIDEO_LIBRARY_LOCK:
+        records = _load_video_library_records_unlocked()
+
+        record = None
+        for item in records:
+            if str(item.get("video_url", "")).strip() == normalized_video_url:
+                record = item
+                break
+
+        if record is None:
+            record = {
+                "id": uuid.uuid4().hex,
+                "video_url": normalized_video_url,
+                "created_at": _utc_timestamp(),
+            }
+            records.append(record)
+
+        cleaned_headlines = [
+            str(item or "").strip() for item in (headlines or []) if str(item or "").strip()
+        ]
+        record["video_url"] = normalized_video_url
+        record["source_image_url"] = str(source_image_url or record.get("source_image_url") or "").strip()
+        record["prompt"] = str(prompt or record.get("prompt") or "").strip()
+        record["headlines"] = cleaned_headlines or record.get("headlines") or []
+        if label:
+            record["label"] = str(label).strip()
+        elif not str(record.get("label", "")).strip():
+            record["label"] = Path(urlparse(normalized_video_url).path).stem or "video"
+
+        records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        _save_video_library_records_unlocked(records)
+        return _public_video_library_record(record)
+
+
+def delete_video_library_record(video_url: str) -> bool:
+    normalized_video_url = str(video_url or "").strip()
+    if not normalized_video_url:
+        return False
+
+    with VIDEO_LIBRARY_LOCK:
+        records = _load_video_library_records_unlocked()
+        filtered_records = [
+            item for item in records if str(item.get("video_url", "")).strip() != normalized_video_url
+        ]
+        if len(filtered_records) == len(records):
+            return False
+        _save_video_library_records_unlocked(filtered_records)
         return True
 
 
@@ -1085,7 +1194,7 @@ def _build_logo_overlay_filter(width: int, height: int) -> str:
         f"fontfile='{_ffmpeg_drawtext_path(logo_font)}':"
         "text='YANGO DRIVE':"
         f"fontsize={logo_font_size}:"
-        "fontcolor=white@0.42:"
+        "fontcolor=white@0.58:"
         f"x={logo_x}:y={logo_y}"
     )
 
@@ -1158,13 +1267,6 @@ def _compose_video_with_titles_and_packshot(base_video_local_url: str, headlines
         final_source = main_video
         if use_packshot:
             packshot_video = temp_dir / "packshot.mp4"
-            packshot_filter = ",".join(
-                [
-                    f"scale={width}:{height}:force_original_aspect_ratio=increase",
-                    f"crop={width}:{height}",
-                    _build_logo_overlay_filter(width, height),
-                ]
-            )
             _run_subprocess(
                 [
                     ffmpeg,
@@ -1175,7 +1277,7 @@ def _compose_video_with_titles_and_packshot(base_video_local_url: str, headlines
                     "-t",
                     "2.000",
                     "-vf",
-                    packshot_filter,
+                    f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
                     "-c:v",
                     "libx264",
                     "-pix_fmt",
@@ -3009,6 +3111,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/library-images":
             self._send_json(HTTPStatus.OK, {"images": list_image_library()})
             return
+        if self.path == "/api/library-videos":
+            self._send_json(HTTPStatus.OK, {"videos": list_video_library()})
+            return
         super().do_GET()
 
     def do_POST(self):
@@ -3024,6 +3129,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/upload-image",
             "/api/create-banners-zip",
             "/api/delete-library-image",
+            "/api/delete-library-video",
         }:
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
             return
@@ -3117,11 +3223,19 @@ class Handler(SimpleHTTPRequestHandler):
                     prompt=prompt,
                     headlines=headlines,
                 )
+                library_video = _upsert_video_library_record(
+                    local_video_url or video_url,
+                    source_image_url=image_url,
+                    prompt=prompt,
+                    headlines=headlines,
+                    label=Path(urlparse(local_video_url or video_url).path).stem,
+                )
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "video_url": video_url,
                         "video_local_url": local_video_url,
+                        "library_video": library_video,
                     },
                 )
                 return
@@ -3182,6 +3296,18 @@ class Handler(SimpleHTTPRequestHandler):
                 deleted = delete_image_library_record(image_url)
                 if not deleted:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "Image not found"})
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+
+            if self.path == "/api/delete-library-video":
+                video_url = str(body.get("videoUrl", "")).strip()
+                if not video_url:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "videoUrl is required"})
+                    return
+                deleted = delete_video_library_record(video_url)
+                if not deleted:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "Video not found"})
                     return
                 self._send_json(HTTPStatus.OK, {"deleted": True})
                 return
