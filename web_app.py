@@ -429,6 +429,7 @@ def _public_video_library_record(record: dict) -> dict:
     return {
         "id": str(record.get("id", "")).strip(),
         "video_url": str(record.get("video_url", "")).strip(),
+        "base_video_url": str(record.get("base_video_url", "")).strip(),
         "created_at": str(record.get("created_at", "")).strip(),
         "source_image_url": str(record.get("source_image_url", "")).strip(),
         "prompt": str(record.get("prompt", "")).strip(),
@@ -450,6 +451,7 @@ def list_video_library() -> list[dict]:
 def _upsert_video_library_record(
     video_url: str,
     *,
+    base_video_url: str = "",
     source_image_url: str = "",
     prompt: str = "",
     headlines: Optional[list[str]] = None,
@@ -480,6 +482,7 @@ def _upsert_video_library_record(
             str(item or "").strip() for item in (headlines or []) if str(item or "").strip()
         ]
         record["video_url"] = normalized_video_url
+        record["base_video_url"] = str(base_video_url or record.get("base_video_url") or normalized_video_url).strip()
         record["source_image_url"] = str(source_image_url or record.get("source_image_url") or "").strip()
         record["prompt"] = str(prompt or record.get("prompt") or "").strip()
         record["headlines"] = cleaned_headlines or record.get("headlines") or []
@@ -507,6 +510,19 @@ def delete_video_library_record(video_url: str) -> bool:
             return False
         _save_video_library_records_unlocked(filtered_records)
         return True
+
+
+def get_video_library_record(video_url: str) -> Optional[dict]:
+    normalized_video_url = str(video_url or "").strip()
+    if not normalized_video_url:
+        return None
+
+    with VIDEO_LIBRARY_LOCK:
+        records = _load_video_library_records_unlocked()
+        for item in records:
+            if str(item.get("video_url", "")).strip() == normalized_video_url:
+                return dict(item)
+    return None
 
 
 def load_tokens_from_file() -> None:
@@ -1316,7 +1332,11 @@ def _compose_video_with_titles_and_packshot(base_video_local_url: str, headlines
         return f"/output/videos/{final_name}"
 
 
-def generate_video_with_kling(image_url: str, prompt: str, headlines: Optional[list[str]] = None) -> tuple[str, str]:
+def remix_video_titles(base_video_url: str, headlines: Optional[list[str]] = None) -> str:
+    return _compose_video_with_titles_and_packshot(base_video_url, headlines or [])
+
+
+def generate_video_with_kling(image_url: str, prompt: str, headlines: Optional[list[str]] = None) -> tuple[str, str, str]:
     prediction = _replicate_kling_prediction(image_url=image_url, prompt=prompt)
     timeout_seconds = int(os.getenv("KLING_TIMEOUT_SECONDS", "240") or "240")
     poll_interval = float(os.getenv("KLING_POLL_INTERVAL_SECONDS", "5") or "5")
@@ -1334,9 +1354,9 @@ def generate_video_with_kling(image_url: str, prompt: str, headlines: Optional[l
         status = str(payload.get("status", "")).strip().lower()
         video_url = _replicate_output_url(payload)
         if video_url:
-            local_video_url = _save_generated_video_local(video_url)
-            final_video_url = _compose_video_with_titles_and_packshot(local_video_url, headlines or [])
-            return video_url, final_video_url
+            raw_local_video_url = _save_generated_video_local(video_url)
+            final_video_url = _compose_video_with_titles_and_packshot(raw_local_video_url, headlines or [])
+            return video_url, raw_local_video_url, final_video_url
         if status in {"failed", "canceled", "cancelled"}:
             error_detail = str(payload.get("error") or status).strip()
             raise RuntimeError(f"Replicate Kling generation failed: {error_detail}")
@@ -3123,6 +3143,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/generate-image",
             "/api/generate-video-prompt",
             "/api/generate-video",
+            "/api/remix-video",
             "/api/regenerate-image",
             "/api/edit-image",
             "/api/render-banners",
@@ -3218,13 +3239,14 @@ class Handler(SimpleHTTPRequestHandler):
                 if not isinstance(headlines_raw, list):
                     headlines_raw = []
                 headlines = [str(item or "").strip() for item in headlines_raw if str(item or "").strip()]
-                video_url, local_video_url = generate_video_with_kling(
+                video_url, raw_local_video_url, local_video_url = generate_video_with_kling(
                     image_url=image_url,
                     prompt=prompt,
                     headlines=headlines,
                 )
                 library_video = _upsert_video_library_record(
                     local_video_url or video_url,
+                    base_video_url=raw_local_video_url,
                     source_image_url=image_url,
                     prompt=prompt,
                     headlines=headlines,
@@ -3235,6 +3257,38 @@ class Handler(SimpleHTTPRequestHandler):
                     {
                         "video_url": video_url,
                         "video_local_url": local_video_url,
+                        "library_video": library_video,
+                    },
+                )
+                return
+
+            if self.path == "/api/remix-video":
+                video_url = str(body.get("videoUrl", "")).strip()
+                headlines_raw = body.get("headlines", [])
+                if not video_url:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "videoUrl is required"})
+                    return
+                if not isinstance(headlines_raw, list):
+                    headlines_raw = []
+                headlines = [str(item or "").strip() for item in headlines_raw if str(item or "").strip()]
+                source_record = get_video_library_record(video_url)
+                if not source_record:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "Video not found"})
+                    return
+                base_video_url = str(source_record.get("base_video_url") or video_url).strip()
+                remixed_video_url = remix_video_titles(base_video_url, headlines)
+                library_video = _upsert_video_library_record(
+                    remixed_video_url,
+                    base_video_url=base_video_url,
+                    source_image_url=str(source_record.get("source_image_url", "")).strip(),
+                    prompt=str(source_record.get("prompt", "")).strip(),
+                    headlines=headlines,
+                    label=Path(urlparse(remixed_video_url).path).stem,
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "video_local_url": remixed_video_url,
                         "library_video": library_video,
                     },
                 )

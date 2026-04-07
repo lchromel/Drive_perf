@@ -267,6 +267,7 @@ function normalizeLibraryVideo(item) {
   return {
     id: String(item.id || videoUrl),
     video_url: videoUrl,
+    base_video_url: String(item.base_video_url || "").trim(),
     created_at: String(item.created_at || "").trim(),
     source_image_url: String(item.source_image_url || "").trim(),
     prompt: String(item.prompt || "").trim(),
@@ -354,8 +355,15 @@ function applySelectedVideo(record, options = {}) {
   const video = normalizeLibraryVideo(record);
   if (!video) return;
   const { closeLibrary = true } = options;
+  if (video.source_image_url) {
+    state.imageUrl = video.source_image_url;
+    if (!state.bannerSourceImageUrl) {
+      state.bannerSourceImageUrl = video.source_image_url;
+    }
+    setSourceStatus("generated");
+  }
   state.videoResultUrl = video.video_url;
-  state.videoRenderStatus = "Saved video ready.";
+  state.videoRenderStatus = "Saved video ready for new titles.";
   if (video.headlines.length) {
     state.videoHeadlines = [video.headlines[0] || "", video.headlines[1] || "", video.headlines[2] || ""];
   }
@@ -1513,6 +1521,42 @@ async function ensureVideoPromptReady() {
 
 async function generateVideoFromPrompt() {
   const currentCarModel = getCurrentCarModel();
+  const selectedSavedVideo = findLibraryVideoByUrl(state.videoResultUrl);
+  if (selectedSavedVideo) {
+    state.videoRendering = true;
+    state.videoRenderStatus = "Rebuilding titles on saved video...";
+    renderUiState();
+    try {
+      const response = await fetch("/api/remix-video", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoUrl: selectedSavedVideo.video_url,
+          headlines: state.videoHeadlines,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Video remix failed");
+      state.videoResultUrl = String(payload.video_local_url || "").trim();
+      state.videoRenderStatus = state.videoResultUrl ? "Video ready." : "Video remixed.";
+      if (!state.videoResultUrl) {
+        throw new Error("Video URL missing");
+      }
+      const savedVideo = normalizeLibraryVideo(payload.library_video);
+      if (savedVideo) {
+        state.videoLibrary = [savedVideo, ...state.videoLibrary.filter((item) => item.video_url !== savedVideo.video_url)];
+      }
+    } catch (error) {
+      state.videoRenderStatus = "Video generation failed.";
+      alert(`ERROR: ${error.message || "VIDEO GENERATION FAILED"}`);
+    } finally {
+      state.videoRendering = false;
+      renderUiState();
+    }
+    return;
+  }
+
   if (!state.imageUrl) {
     alert("GENERATE OR UPLOAD IMAGE FIRST");
     return;
