@@ -1182,8 +1182,8 @@ def _prepare_video_headline_text(text: str, width: int, height: int) -> str:
     if not raw:
         return ""
     headline_font_path = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
-    font_size = max(32, int(round(height * (132 / 1024))))
-    max_width = max(200, int(round(width - (160 / 1024) * width)))
+    font_size = max(42, int(round(width * (87.175 / 1024))))
+    max_width = max(220, int(round(width * (682.215 / 1024))))
     img = Image.new("RGB", (width, height), "black")
     draw = ImageDraw.Draw(img)
     font = _load_font(headline_font_path, font_size)
@@ -1210,9 +1210,9 @@ def _headline_segments(headlines: list[str], main_duration: float) -> list[tuple
 
 def _build_logo_overlay_filter(width: int, height: int) -> str:
     logo_font = ROOT / "assets" / "fonts" / "YangoGroupHeadline-HeavyItalic.ttf"
-    logo_font_size = max(30, int(round(height * (80 / 1024))))
-    logo_x = int(round(width * (80 / 1024)))
-    logo_y = int(round(height * (80 / 1024)))
+    logo_font_size = max(28, int(round(width * (52.833 / 1024))))
+    logo_x = int(round(width * (48 / 1024)))
+    logo_y = int(round(height * (48 / 576)))
     return (
         "drawtext="
         f"fontfile='{_ffmpeg_drawtext_path(logo_font)}':"
@@ -1229,10 +1229,10 @@ def _build_title_overlay_filters(width: int, height: int, main_duration: float, 
         return filters
 
     headline_font = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
-    headline_font_size = max(32, int(round(height * (132 / 1024))))
-    title_x = int(round(width * (80 / 1024)))
-    bottom_padding = int(round(height * (32 / 1024)))
-    line_spacing = max(0, int(round(height * (8 / 1024))))
+    headline_font_size = max(42, int(round(width * (87.175 / 1024))))
+    title_x = int(round(width * (48 / 1024)))
+    bottom_padding = int(round(height * (48 / 576)))
+    line_spacing = int(round(-headline_font_size * 0.08))
     for index, (start, end, text) in enumerate(_headline_segments(headlines, main_duration)):
         prepared = _prepare_video_headline_text(text, width, height)
         if not prepared:
