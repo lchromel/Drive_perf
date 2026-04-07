@@ -94,6 +94,11 @@ const state = {
   videoRendering: false,
   videoRenderStatus: "No video yet.",
   videoResultUrl: "",
+  videoHeadlines: [
+    "Drive with comfort every day",
+    "",
+    "",
+  ],
   generating: false,
   activeTab: "image",
   sourceLibraryOpen: false,
@@ -188,6 +193,9 @@ const videoResultWrapEl = document.getElementById("videoResultWrap");
 const videoResultPlayerEl = document.getElementById("videoResultPlayer");
 const videoDownloadLinkEl = document.getElementById("videoDownloadLink");
 const videoEmptyStateEl = document.getElementById("videoEmptyState");
+const videoHeadline1El = document.getElementById("videoHeadline1");
+const videoHeadline2El = document.getElementById("videoHeadline2");
+const videoHeadline3El = document.getElementById("videoHeadline3");
 let bannerAutoRenderTimer = null;
 let customAccentTapCount = 0;
 let customAccentTapTimer = null;
@@ -558,6 +566,14 @@ function renderUiState() {
   if (videoRenderStatusEl) {
     videoRenderStatusEl.textContent = state.videoRenderStatus;
   }
+  const videoHeadlineInputs = [videoHeadline1El, videoHeadline2El, videoHeadline3El];
+  videoHeadlineInputs.forEach((input, index) => {
+    if (!input) return;
+    const nextValue = String(state.videoHeadlines[index] || "");
+    if (input.value !== nextValue) {
+      input.value = nextValue;
+    }
+  });
   if (videoResultWrapEl && videoResultPlayerEl && videoDownloadLinkEl) {
     const hasVideo = Boolean(state.videoResultUrl);
     videoResultWrapEl.classList.toggle("hidden", !hasVideo);
@@ -1369,6 +1385,7 @@ async function generateVideoFromPrompt() {
       body: JSON.stringify({
         imageUrl: state.imageUrl,
         prompt,
+        headlines: state.videoHeadlines,
       }),
     });
     const payload = await response.json();
@@ -1707,6 +1724,17 @@ if (document.fonts && document.fonts.ready) {
 
 promptInputEl.addEventListener("input", (event) => {
   state.editPromptText = event.target.value;
+});
+
+[
+  [videoHeadline1El, 0],
+  [videoHeadline2El, 1],
+  [videoHeadline3El, 2],
+].forEach(([input, index]) => {
+  if (!input) return;
+  input.addEventListener("input", (event) => {
+    state.videoHeadlines[index] = event.target.value;
+  });
 });
 
 if (promptBackBtn) {

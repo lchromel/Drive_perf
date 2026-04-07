@@ -1,5 +1,9 @@
 import json
 import os
+import shlex
+import shutil
+import subprocess
+import tempfile
 import textwrap
 import urllib.request
 import urllib.error
@@ -44,6 +48,7 @@ GENERATED_DIR = ROOT / "output" / "generated"
 ZIP_DIR = ROOT / "output" / "archives"
 UNCROP_DIR = ROOT / "output" / "uncrop"
 VIDEO_DIR = ROOT / "output" / "videos"
+DEFAULT_PACKSHOT_VIDEO = ROOT / "assets" / "video" / "packshot.mp4"
 IMAGE_LIBRARY_FILE = ROOT / "output" / "image_library.json"
 IMAGE_LIBRARY_LOCK = threading.Lock()
 WEB_APP_BASIC_AUTH_USERNAME = os.getenv("WEB_APP_BASIC_AUTH_USERNAME", "").strip()
@@ -831,6 +836,74 @@ def _replicate_output_url(prediction: dict) -> str:
     return ""
 
 
+def _chunk_scene_prompts(scene_prompts: list[str], max_chunks: int) -> list[str]:
+    if max_chunks <= 0:
+        return []
+    if len(scene_prompts) <= max_chunks:
+        return scene_prompts[:]
+
+    grouped: list[str] = []
+    total = len(scene_prompts)
+    start = 0
+    for chunk_index in range(max_chunks):
+        next_start = round((chunk_index + 1) * total / max_chunks)
+        items = scene_prompts[start:next_start]
+        start = next_start
+        if not items:
+            continue
+        grouped.append(" ".join(items))
+    return grouped
+
+
+def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[str]:
+    text = str(prompt or "").strip()
+    if not text or total_duration <= 0:
+        return None
+
+    style_match = re.search(r"Style:\s*(.+)$", text, flags=re.IGNORECASE | re.DOTALL)
+    style_suffix = ""
+    if style_match:
+        style_text = style_match.group(1).strip()
+        if style_text:
+            style_suffix = f" Style: {style_text}"
+        text = text[:style_match.start()].strip()
+
+    matches = list(re.finditer(r"Scene\s*(\d+)\s*:\s*", text, flags=re.IGNORECASE))
+    if len(matches) < 2:
+        return None
+
+    scenes: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        scene_text = text[start:end].strip()
+        if scene_text:
+            scenes.append(re.sub(r"\s+", " ", scene_text))
+
+    if len(scenes) < 2:
+        return None
+
+    max_shots = min(6, total_duration)
+    shot_prompts = _chunk_scene_prompts(scenes[:6], max_shots)
+    if len(shot_prompts) < 2:
+        return None
+
+    base_duration = total_duration // len(shot_prompts)
+    remainder = total_duration % len(shot_prompts)
+    if base_duration < 1:
+        return None
+
+    multi_prompt: list[dict[str, Union[str, int]]] = []
+    for index, scene_text in enumerate(shot_prompts):
+        scene_duration = base_duration + (1 if index < remainder else 0)
+        if scene_duration < 1:
+            scene_duration = 1
+        full_prompt = f"{scene_text}{style_suffix}".strip()
+        multi_prompt.append({"prompt": full_prompt, "duration": scene_duration})
+
+    return json.dumps(multi_prompt, ensure_ascii=False)
+
+
 def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
     headers = _replicate_headers()
     base_url = "https://api.replicate.com/v1"
@@ -858,6 +931,9 @@ def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
         "mode": mode,
         "generate_audio": generate_audio,
     }
+    multi_prompt = _build_replicate_multi_prompt(prompt, duration)
+    if multi_prompt:
+        input_payload["multi_prompt"] = multi_prompt
     if negative_prompt:
         input_payload["negative_prompt"] = negative_prompt
 
@@ -873,7 +949,272 @@ def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
     return prediction
 
 
-def generate_video_with_kling(image_url: str, prompt: str) -> tuple[str, str]:
+def _resolve_output_url_to_path(url: str) -> Path:
+    value = str(url or "").strip()
+    if not value.startswith("/"):
+        raise RuntimeError("Expected local output URL")
+    path = (ROOT / value.lstrip("/")).resolve()
+    output_root = (ROOT / "output").resolve()
+    if not str(path).startswith(str(output_root)):
+        raise RuntimeError("Resolved path is outside output directory")
+    return path
+
+
+def _ffmpeg_binary() -> str:
+    path = shutil.which("ffmpeg")
+    if not path:
+        raise RuntimeError("ffmpeg is not installed")
+    return path
+
+
+def _ffprobe_binary() -> str:
+    path = shutil.which("ffprobe")
+    if not path:
+        raise RuntimeError("ffprobe is not installed")
+    return path
+
+
+def _run_subprocess(args: list[str]) -> None:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(detail or "Subprocess failed")
+
+
+def _probe_video_metadata(path: Path) -> dict:
+    ffprobe = _ffprobe_binary()
+    completed = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            str(path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(detail or "ffprobe failed")
+    return json.loads(completed.stdout or "{}")
+
+
+def _video_dimensions_and_duration(path: Path) -> tuple[int, int, float]:
+    meta = _probe_video_metadata(path)
+    streams = meta.get("streams") or []
+    width = 0
+    height = 0
+    duration = 0.0
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        if str(stream.get("codec_type", "")).lower() != "video":
+            continue
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        duration = float(stream.get("duration") or 0.0)
+        break
+    if duration <= 0:
+        fmt = meta.get("format") if isinstance(meta, dict) else None
+        if isinstance(fmt, dict):
+            duration = float(fmt.get("duration") or 0.0)
+    if width <= 0 or height <= 0 or duration <= 0:
+        raise RuntimeError("Could not read video dimensions or duration")
+    return width, height, duration
+
+
+def _escape_drawtext_value(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace(",", "\\,")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )
+
+
+def _ffmpeg_drawtext_path(path: Path) -> str:
+    return _escape_drawtext_value(str(path.resolve()))
+
+
+def _prepare_video_headline_text(text: str, width: int, height: int) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    headline_font_path = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
+    font_size = max(32, int(round(height * (132 / 1024))))
+    max_width = max(200, int(round(width - (160 / 1024) * width)))
+    img = Image.new("RGB", (width, height), "black")
+    draw = ImageDraw.Draw(img)
+    font = _load_font(headline_font_path, font_size)
+    wrapped = _wrap_text_by_width(draw, raw.upper(), font, max_width)
+    return wrapped.strip()
+
+
+def _headline_segments(headlines: list[str], main_duration: float) -> list[tuple[float, float, str]]:
+    cleaned = [str(item or "").strip() for item in headlines if str(item or "").strip()]
+    if not cleaned or main_duration <= 0:
+        return []
+    segments: list[tuple[float, float, str]] = []
+    cursor = 0.0
+    for text in cleaned:
+        if cursor >= main_duration:
+            break
+        end = min(main_duration, cursor + 5.0)
+        if end - cursor <= 0:
+            break
+        segments.append((cursor, end, text))
+        cursor = end
+    return segments
+
+
+def _build_logo_overlay_filter(width: int, height: int) -> str:
+    logo_font = ROOT / "assets" / "fonts" / "YangoGroupHeadline-HeavyItalic.ttf"
+    logo_font_size = max(30, int(round(height * (80 / 1024))))
+    logo_x = int(round(width * (80 / 1024)))
+    logo_y = int(round(height * (80 / 1024)))
+    return (
+        "drawtext="
+        f"fontfile='{_ffmpeg_drawtext_path(logo_font)}':"
+        "text='YANGO DRIVE':"
+        f"fontsize={logo_font_size}:"
+        "fontcolor=white@0.42:"
+        f"x={logo_x}:y={logo_y}"
+    )
+
+
+def _build_title_overlay_filters(width: int, height: int, main_duration: float, headlines: list[str], temp_dir: Path) -> list[str]:
+    filters: list[str] = [_build_logo_overlay_filter(width, height)]
+    if main_duration <= 0:
+        return filters
+
+    headline_font = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
+    headline_font_size = max(32, int(round(height * (132 / 1024))))
+    title_x = int(round(width * (80 / 1024)))
+    bottom_padding = int(round(height * (32 / 1024)))
+    line_spacing = max(0, int(round(height * (8 / 1024))))
+    for index, (start, end, text) in enumerate(_headline_segments(headlines, main_duration)):
+        prepared = _prepare_video_headline_text(text, width, height)
+        if not prepared:
+            continue
+        text_file = temp_dir / f"title_{index + 1}.txt"
+        text_file.write_text(prepared, encoding="utf-8")
+        filters.append(
+            "drawtext="
+            f"fontfile='{_ffmpeg_drawtext_path(headline_font)}':"
+            f"textfile='{_ffmpeg_drawtext_path(text_file)}':"
+            "reload=0:"
+            f"fontsize={headline_font_size}:"
+            "fontcolor=white:"
+            f"line_spacing={line_spacing}:"
+            f"x={title_x}:y=h-th-{bottom_padding}:"
+            f"enable='between(t,{start:.3f},{end:.3f})'"
+        )
+    return filters
+
+
+def _compose_video_with_titles_and_packshot(base_video_local_url: str, headlines: list[str], packshot_path: Optional[Path] = None) -> str:
+    ffmpeg = _ffmpeg_binary()
+    base_video_path = _resolve_output_url_to_path(base_video_local_url)
+    if not base_video_path.exists():
+        raise RuntimeError("Base video file not found")
+
+    width, height, duration = _video_dimensions_and_duration(base_video_path)
+    packshot_file = packshot_path or DEFAULT_PACKSHOT_VIDEO
+    use_packshot = packshot_file.exists() and duration > 2.1
+    packshot_duration = 2.0 if use_packshot else 0.0
+    main_duration = max(0.1, duration - packshot_duration)
+
+    with tempfile.TemporaryDirectory(prefix="drive_perf_video_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        main_video = temp_dir / "main.mp4"
+        filter_chain = ",".join(_build_title_overlay_filters(width, height, main_duration, headlines, temp_dir)) or "null"
+        _run_subprocess(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(base_video_path),
+                "-an",
+                "-t",
+                f"{main_duration:.3f}",
+                "-vf",
+                filter_chain,
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(main_video),
+            ]
+        )
+
+        final_source = main_video
+        if use_packshot:
+            packshot_video = temp_dir / "packshot.mp4"
+            packshot_filter = ",".join(
+                [
+                    f"scale={width}:{height}:force_original_aspect_ratio=increase",
+                    f"crop={width}:{height}",
+                    _build_logo_overlay_filter(width, height),
+                ]
+            )
+            _run_subprocess(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(packshot_file),
+                    "-an",
+                    "-t",
+                    "2.000",
+                    "-vf",
+                    packshot_filter,
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(packshot_video),
+                ]
+            )
+
+            final_output = temp_dir / "final.mp4"
+            _run_subprocess(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(main_video),
+                    "-i",
+                    str(packshot_video),
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+                    "-map",
+                    "[outv]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(final_output),
+                ]
+            )
+            final_source = final_output
+
+        _ensure_output_directories()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        final_name = f"video_final_{stamp}.mp4"
+        final_path = VIDEO_DIR / final_name
+        shutil.copyfile(final_source, final_path)
+        return f"/output/videos/{final_name}"
+
+
+def generate_video_with_kling(image_url: str, prompt: str, headlines: Optional[list[str]] = None) -> tuple[str, str]:
     prediction = _replicate_kling_prediction(image_url=image_url, prompt=prompt)
     timeout_seconds = int(os.getenv("KLING_TIMEOUT_SECONDS", "240") or "240")
     poll_interval = float(os.getenv("KLING_POLL_INTERVAL_SECONDS", "5") or "5")
@@ -891,7 +1232,9 @@ def generate_video_with_kling(image_url: str, prompt: str) -> tuple[str, str]:
         status = str(payload.get("status", "")).strip().lower()
         video_url = _replicate_output_url(payload)
         if video_url:
-            return video_url, _save_generated_video_local(video_url)
+            local_video_url = _save_generated_video_local(video_url)
+            final_video_url = _compose_video_with_titles_and_packshot(local_video_url, headlines or [])
+            return video_url, final_video_url
         if status in {"failed", "canceled", "cancelled"}:
             error_detail = str(payload.get("error") or status).strip()
             raise RuntimeError(f"Replicate Kling generation failed: {error_detail}")
@@ -2759,13 +3102,21 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/generate-video":
                 image_url = str(body.get("imageUrl", "")).strip()
                 prompt = str(body.get("prompt", "")).strip()
+                headlines_raw = body.get("headlines", [])
                 if not image_url:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "imageUrl is required"})
                     return
                 if not prompt:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "prompt is required"})
                     return
-                video_url, local_video_url = generate_video_with_kling(image_url=image_url, prompt=prompt)
+                if not isinstance(headlines_raw, list):
+                    headlines_raw = []
+                headlines = [str(item or "").strip() for item in headlines_raw if str(item or "").strip()]
+                video_url, local_video_url = generate_video_with_kling(
+                    image_url=image_url,
+                    prompt=prompt,
+                    headlines=headlines,
+                )
                 self._send_json(
                     HTTPStatus.OK,
                     {

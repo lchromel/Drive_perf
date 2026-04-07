@@ -899,6 +899,45 @@ body {
   color: rgba(14, 14, 14, 0.72);
 }
 
+.video-title-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-title-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.video-title-slot {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: rgba(14, 14, 14, 0.48);
+}
+
+.video-title-input {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid rgba(14, 14, 14, 0.12);
+  background: rgba(14, 14, 14, 0.02);
+  color: var(--text-dark);
+  padding: 10px 12px;
+  font-size: 16px;
+  line-height: 1.1;
+  font-family: "Yango Group Headline", "Arial", sans-serif;
+  font-weight: 800;
+  text-transform: uppercase;
+  resize: vertical;
+  outline: none;
+}
+
+.video-title-input::placeholder {
+  color: rgba(14, 14, 14, 0.32);
+}
+
 .video-workspace {
   min-height: 100%;
   display: flex;
