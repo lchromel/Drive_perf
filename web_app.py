@@ -928,6 +928,27 @@ def _extract_kling_video_url(payload: dict) -> str:
     return ""
 
 
+def _get_kling_task_payload(task_id: str) -> dict:
+    base_url = _kling_api_base_url().rstrip("/")
+    headers = _kling_headers()
+    candidates = [
+        f"{base_url}/v1/videos/image2video/{task_id}",
+        f"{base_url}/v1/videos/{task_id}",
+    ]
+    last_error: Optional[Exception] = None
+    for url in candidates:
+        try:
+            return _request_json(url, "GET", headers)
+        except RuntimeError as exc:
+            last_error = exc
+            if "HTTP 404" in str(exc):
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Kling task query failed")
+
+
 def _save_generated_video_local(remote_url: str) -> str:
     _ensure_output_directories()
     raw = _download_remote_bytes(remote_url)
@@ -1376,11 +1397,7 @@ def generate_video_with_kling(image_url: str, prompt: str, headlines: Optional[l
         raise RuntimeError("Kling task id is missing")
 
     while time.time() - started < timeout_seconds:
-        payload = _request_json(
-            f"{_kling_api_base_url()}/v1/videos/{task_id}",
-            "GET",
-            _kling_headers(),
-        )
+        payload = _get_kling_task_payload(task_id)
         status = _extract_kling_status(payload)
         video_url = _extract_kling_video_url(payload)
         if video_url:
