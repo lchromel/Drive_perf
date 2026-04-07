@@ -1710,6 +1710,23 @@ def _save_uploaded_file_bytes(file_bytes: bytes, original_name: str = "") -> str
     return f"/output/generated/{file_name}"
 
 
+def _save_uploaded_video_bytes(file_bytes: bytes, original_name: str = "") -> str:
+    if not file_bytes:
+        raise ValueError("Uploaded video is empty")
+
+    _ensure_output_directories()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = Path(original_name).stem if original_name else "upload"
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem).strip("_") or "upload"
+    ext = Path(original_name).suffix.lower() if original_name else ""
+    if ext not in {".mp4", ".mov", ".webm"}:
+        ext = ".mp4"
+    file_name = f"{safe_stem}_{stamp}{ext}"
+    file_path = VIDEO_DIR / file_name
+    file_path.write_bytes(file_bytes)
+    return f"/output/videos/{file_name}"
+
+
 def create_banners_zip(banner_urls: Iterable[str]) -> str:
     _ensure_output_directories()
     files: list[Path] = []
@@ -3195,6 +3212,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/edit-image",
             "/api/render-banners",
             "/api/upload-image",
+            "/api/upload-video",
             "/api/create-banners-zip",
             "/api/delete-library-image",
             "/api/delete-library-video",
@@ -3222,6 +3240,38 @@ class Handler(SimpleHTTPRequestHandler):
                     file_name = str(getattr(image_field, "filename", "") or "").strip()
                     local_url = _save_uploaded_file_bytes(file_bytes, file_name)
                     self._send_json(HTTPStatus.OK, {"image_local_url": local_url})
+                    return
+
+            if self.path == "/api/upload-video":
+                content_type = self.headers.get("Content-Type", "")
+                if content_type.startswith("multipart/form-data"):
+                    form = cgi.FieldStorage(
+                        fp=self.rfile,
+                        headers=self.headers,
+                        environ={
+                            "REQUEST_METHOD": "POST",
+                            "CONTENT_TYPE": content_type,
+                        },
+                    )
+                    video_field = form["video"] if "video" in form else None
+                    if video_field is None or not getattr(video_field, "file", None):
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "video is required"})
+                        return
+                    file_bytes = video_field.file.read()
+                    file_name = str(getattr(video_field, "filename", "") or "").strip()
+                    local_url = _save_uploaded_video_bytes(file_bytes, file_name)
+                    library_video = _upsert_video_library_record(
+                        local_url,
+                        base_video_url=local_url,
+                        label=Path(urlparse(local_url).path).stem,
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "video_local_url": local_url,
+                            "library_video": library_video,
+                        },
+                    )
                     return
 
             length = int(self.headers.get("Content-Length", "0"))

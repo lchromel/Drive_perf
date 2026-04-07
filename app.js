@@ -198,6 +198,8 @@ const videoEmptyStateEl = document.getElementById("videoEmptyState");
 const videoLibraryEl = document.getElementById("videoLibrary");
 const videoLibraryToggleEl = document.getElementById("videoLibraryToggle");
 const videoLibraryChevronEl = document.getElementById("videoLibraryChevron");
+const uploadVideoBtnEl = document.getElementById("uploadVideoBtn");
+const uploadVideoInputEl = document.getElementById("uploadVideoInput");
 const videoHeadline1El = document.getElementById("videoHeadline1");
 const videoHeadline2El = document.getElementById("videoHeadline2");
 const videoHeadline3El = document.getElementById("videoHeadline3");
@@ -361,6 +363,8 @@ function applySelectedVideo(record, options = {}) {
       state.bannerSourceImageUrl = video.source_image_url;
     }
     setSourceStatus("generated");
+  } else if (videoSourceStatusEl) {
+    videoSourceStatusEl.textContent = SOURCE_STATUS.uploaded;
   }
   state.videoResultUrl = video.video_url;
   state.videoRenderStatus = "Saved video ready for new titles.";
@@ -1325,6 +1329,23 @@ async function uploadCustomImage(file) {
   return payload.image_local_url || "";
 }
 
+async function uploadCustomVideo(file) {
+  const formData = new FormData();
+  formData.append("video", file, file.name || "upload.mp4");
+
+  const response = await fetch("/api/upload-video", {
+    method: "POST",
+    credentials: "same-origin",
+    body: formData,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Upload failed");
+  return {
+    videoUrl: String(payload.video_local_url || "").trim(),
+    libraryVideo: normalizeLibraryVideo(payload.library_video),
+  };
+}
+
 async function generatePrompt() {
   const currentCarModel = getCurrentCarModel();
   if (!currentCarModel) {
@@ -1819,6 +1840,42 @@ uploadImageInputEl.addEventListener("change", async (event) => {
     uploadImageInputEl.value = "";
   }
 });
+
+if (uploadVideoBtnEl && uploadVideoInputEl) {
+  uploadVideoBtnEl.addEventListener("click", () => uploadVideoInputEl.click());
+  uploadVideoInputEl.addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (videoSourceStatusEl) {
+      videoSourceStatusEl.textContent = SOURCE_STATUS.uploading;
+    }
+    try {
+      const payload = await uploadCustomVideo(file);
+      if (!payload.videoUrl) {
+        throw new Error("Upload failed");
+      }
+      state.videoResultUrl = payload.videoUrl;
+      state.videoRenderStatus = "Uploaded video ready for titles.";
+      if (payload.libraryVideo) {
+        state.videoLibrary = [
+          payload.libraryVideo,
+          ...state.videoLibrary.filter((item) => item.video_url !== payload.libraryVideo.video_url),
+        ];
+      }
+      if (videoSourceStatusEl) {
+        videoSourceStatusEl.textContent = SOURCE_STATUS.uploaded;
+      }
+      renderUiState();
+    } catch (error) {
+      if (videoSourceStatusEl) {
+        videoSourceStatusEl.textContent = SOURCE_STATUS.failed;
+      }
+      alert(`ERROR: ${error.message || "UPLOAD FAILED"}`);
+    } finally {
+      uploadVideoInputEl.value = "";
+    }
+  });
+}
 
 addTextSetBtn.addEventListener("click", () => {
   const sourceSet =
