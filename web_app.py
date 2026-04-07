@@ -980,6 +980,14 @@ def _chunk_scene_prompts(scene_prompts: list[str], max_chunks: int) -> list[str]
     return grouped
 
 
+def _truncate_replicate_shot_prompt(text: str, limit: int = 500) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    truncated = cleaned[:limit].rsplit(" ", 1)[0].strip(" ,;:-")
+    return truncated or cleaned[:limit].strip()
+
+
 def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[str]:
     text = str(prompt or "").strip()
     if not text or total_duration <= 0:
@@ -1023,7 +1031,7 @@ def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[
         scene_duration = base_duration + (1 if index < remainder else 0)
         if scene_duration < 1:
             scene_duration = 1
-        full_prompt = f"{scene_text}{style_suffix}".strip()
+        full_prompt = _truncate_replicate_shot_prompt(f"{scene_text}{style_suffix}".strip())
         multi_prompt.append({"prompt": full_prompt, "duration": scene_duration})
 
     return json.dumps(multi_prompt, ensure_ascii=False)
