@@ -810,51 +810,87 @@ def _save_generated_video_local(remote_url: str) -> str:
     return f"/output/videos/{file_name}"
 
 
+def _b64url_json(data: dict) -> str:
+    raw = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_bytes(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _kling_bearer_token() -> str:
+    access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
+    secret_key = os.getenv("KLING_SECRET_KEY", "").strip()
+    if not access_key:
+        raise RuntimeError("KLING_ACCESS_KEY is not set")
+    if not secret_key:
+        raise RuntimeError("KLING_SECRET_KEY is not set")
+
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "iss": access_key,
+        "exp": now + 1800,
+        "nbf": now - 5,
+    }
+    signing_input = f"{_b64url_json(header)}.{_b64url_json(payload)}".encode("ascii")
+    signature = hmac.new(secret_key.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return f"{signing_input.decode('ascii')}.{_b64url_bytes(signature)}"
+
+
 def _kling_headers() -> dict:
-    api_key = os.getenv("KLING_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("KLING_API_KEY is not set")
+    bearer_token = _kling_bearer_token()
     return {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {bearer_token}",
         "Content-Type": "application/json",
     }
 
 
 def _kling_create_image_to_video_task(image_url: str, prompt: str) -> str:
-    base_url = os.getenv("KLING_BASE_URL", "https://api.klingapi.com").rstrip("/")
-    model = os.getenv("KLING_MODEL", "kling-v3-pro").strip() or "kling-v3-pro"
+    base_url = os.getenv("KLING_BASE_URL", "https://api-singapore.klingai.com").rstrip("/")
+    model = os.getenv("KLING_MODEL", "kling-v2.6-pro").strip() or "kling-v2.6-pro"
     duration = int(os.getenv("KLING_DURATION", "5") or "5")
     if duration not in {5, 10}:
         duration = 5
     aspect_ratio = _closest_video_aspect_ratio_for_image(image_url)
-    image_data_url = _image_input_data_url_from_url(image_url)
+    image_b64 = _image_base64_from_url(image_url)
     headers = _kling_headers()
     endpoint = f"{base_url}/v1/videos/image2video"
+    mode = "pro" if model.endswith("-pro") or model.endswith("-o1") else "std"
 
     payload_candidates = [
         {
-            "model": model,
+            "model_name": model,
+            "image": image_b64,
             "prompt": prompt,
-            "image_url": image_data_url,
             "duration": duration,
             "aspect_ratio": aspect_ratio,
-            "mode": "professional",
+            "mode": mode,
+        },
+        {
+            "model_name": model,
+            "image_url": image_b64,
+            "prompt": prompt,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "mode": mode,
+        },
+        {
+            "model_name": model,
+            "input_image": image_b64,
+            "prompt": prompt,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "mode": mode,
         },
         {
             "model": model,
+            "image": image_b64,
             "prompt": prompt,
-            "image": image_data_url,
             "duration": duration,
             "aspect_ratio": aspect_ratio,
-            "mode": "professional",
-        },
-        {
-            "model": model,
-            "prompt": prompt,
-            "input_image": image_data_url,
-            "duration": duration,
-            "aspect_ratio": aspect_ratio,
-            "mode": "professional",
+            "mode": mode,
         },
     ]
 
@@ -874,7 +910,7 @@ def _kling_create_image_to_video_task(image_url: str, prompt: str) -> str:
 
 
 def _kling_get_task(task_id: str) -> dict:
-    base_url = os.getenv("KLING_BASE_URL", "https://api.klingapi.com").rstrip("/")
+    base_url = os.getenv("KLING_BASE_URL", "https://api-singapore.klingai.com").rstrip("/")
     headers = _kling_headers()
     return _request_json(f"{base_url}/v1/videos/{task_id}", "GET", headers)
 
@@ -1002,8 +1038,12 @@ def _request_json(url: str, method: str, headers: dict, payload: Optional[dict] 
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=90) as response:
-        raw = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(req, timeout=90) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
     return json.loads(raw or "{}")
 
 
@@ -1070,6 +1110,14 @@ def _image_input_data_url_from_url(url: str) -> str:
     image.save(buf, format="PNG", optimize=True)
     encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _image_base64_from_url(url: str) -> str:
+    raw = _read_image_bytes_from_url(url)
+    image = Image.open(BytesIO(raw)).convert("RGB")
+    buf = BytesIO()
+    image.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _encode_multipart_form_data(fields: list[tuple[str, str]], files: list[tuple[str, str, bytes, str]]) -> tuple[bytes, str]:
