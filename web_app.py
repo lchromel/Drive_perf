@@ -1182,7 +1182,7 @@ def _prepare_video_headline_text(text: str, width: int, height: int) -> str:
     if not raw:
         return ""
     headline_font_path = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
-    font_size = max(42, int(round(width * (87.175 / 1024))))
+    font_size = max(36, int(round(width * (74 / 1024))))
     max_width = max(220, int(round(width * (682.215 / 1024))))
     img = Image.new("RGB", (width, height), "black")
     draw = ImageDraw.Draw(img)
@@ -1229,7 +1229,7 @@ def _build_title_overlay_filters(width: int, height: int, main_duration: float, 
         return filters
 
     headline_font = ROOT / "assets" / "fonts" / "YangoGroupHeadline-Heavy.ttf"
-    headline_font_size = max(42, int(round(width * (87.175 / 1024))))
+    headline_font_size = max(36, int(round(width * (74 / 1024))))
     title_x = int(round(width * (48 / 1024)))
     bottom_padding = int(round(height * (48 / 576)))
     line_spacing = int(round(-headline_font_size * 0.08))
