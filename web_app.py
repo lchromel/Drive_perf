@@ -555,7 +555,8 @@ def load_tokens_from_file() -> None:
                 "RECRAFT_API_TOKEN",
                 "RECRAFT_MODEL",
                 "RECRAFT_SIZE",
-                "KLING_API_KEY",
+                "KLING_ACCESS_KEY",
+                "KLING_SECRET_KEY",
                 "REPLICATE_API_TOKEN",
                 "REPLICATE_MODEL",
                 "CLIPDROP_API_KEY",
@@ -941,10 +942,35 @@ def _save_generated_video_local(remote_url: str) -> str:
     return f"/output/videos/{file_name}"
 
 
+def _base64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _generate_kling_api_token() -> str:
+    access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
+    secret_key = os.getenv("KLING_SECRET_KEY", "").strip()
+    if not access_key:
+        raise RuntimeError("KLING_ACCESS_KEY is not set")
+    if not secret_key:
+        raise RuntimeError("KLING_SECRET_KEY is not set")
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    now = int(time.time())
+    payload = {
+        "iss": access_key,
+        "exp": now + 1800,
+        "nbf": now - 5,
+    }
+    header_segment = _base64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payload_segment = _base64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{header_segment}.{payload_segment}".encode("utf-8")
+    signature = hmac.new(secret_key.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    signature_segment = _base64url_encode(signature)
+    return f"{header_segment}.{payload_segment}.{signature_segment}"
+
+
 def _kling_headers() -> dict:
-    api_token = os.getenv("KLING_API_KEY", "").strip()
-    if not api_token:
-        raise RuntimeError("KLING_API_KEY is not set")
+    api_token = _generate_kling_api_token()
     return {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
@@ -970,7 +996,7 @@ def _chunk_scene_prompts(scene_prompts: list[str], max_chunks: int) -> list[str]
     return grouped
 
 
-def _truncate_replicate_shot_prompt(text: str, limit: int = 500) -> str:
+def _truncate_kling_shot_prompt(text: str, limit: int = 500) -> str:
     cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(cleaned) <= limit:
         return cleaned
@@ -978,7 +1004,7 @@ def _truncate_replicate_shot_prompt(text: str, limit: int = 500) -> str:
     return truncated or cleaned[:limit].strip()
 
 
-def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[str]:
+def _build_kling_multi_prompt(prompt: str, total_duration: int) -> Optional[list[dict[str, Union[str, int]]]]:
     text = str(prompt or "").strip()
     if not text or total_duration <= 0:
         return None
@@ -1021,41 +1047,58 @@ def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[
         scene_duration = base_duration + (1 if index < remainder else 0)
         if scene_duration < 1:
             scene_duration = 1
-        full_prompt = _truncate_replicate_shot_prompt(f"{scene_text}{style_suffix}".strip())
-        multi_prompt.append({"prompt": full_prompt, "duration": scene_duration})
+        full_prompt = _truncate_kling_shot_prompt(f"{scene_text}{style_suffix}".strip())
+        multi_prompt.append(
+            {
+                "index": index + 1,
+                "prompt": full_prompt,
+                "duration": str(scene_duration),
+            }
+        )
 
-    return json.dumps(multi_prompt, ensure_ascii=False)
+    return multi_prompt
 
 
 def _kling_api_base_url() -> str:
-    return "https://api.klingapi.com"
+    return "https://api-singapore.klingai.com"
 
 
 def _normalize_kling_mode(raw_mode: str) -> str:
     _ = raw_mode
-    return "professional"
+    return "pro"
 
 
-def _normalize_kling_duration(raw_duration: str) -> int:
+def _normalize_kling_duration(raw_duration: str) -> str:
     try:
         duration = int(raw_duration or "5")
     except (TypeError, ValueError):
         duration = 5
-    return 10 if duration >= 10 else 5
+    if duration >= 15:
+        return "15"
+    if duration >= 10:
+        return "10"
+    return "5"
 
 
 def _kling_create_image_to_video_task(image_url: str, prompt: str) -> dict:
     headers = _kling_headers()
     base_url = _kling_api_base_url()
+    duration = _normalize_kling_duration(os.getenv("KLING_DURATION", "5"))
+    multi_prompt = _build_kling_multi_prompt(prompt, int(duration))
     negative_prompt = os.getenv("KLING_NEGATIVE_PROMPT", "").strip()
     payload = {
-        "model": "kling-v3",
+        "model_name": "kling-v3",
         "prompt": str(prompt or "").strip(),
         "image": _image_base64_from_url(image_url),
-        "duration": _normalize_kling_duration(os.getenv("KLING_DURATION", "5")),
+        "duration": duration,
         "aspect_ratio": _closest_video_aspect_ratio_for_image(image_url),
-        "mode": _normalize_kling_mode("professional"),
+        "mode": _normalize_kling_mode("pro"),
+        "sound": "on",
     }
+    if multi_prompt:
+        payload["multi_shot"] = True
+        payload["shot_type"] = "customize"
+        payload["multi_prompt"] = multi_prompt
     if negative_prompt:
         payload["negative_prompt"] = negative_prompt
     return _request_json(f"{base_url}/v1/videos/image2video", "POST", headers, payload)
