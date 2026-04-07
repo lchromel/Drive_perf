@@ -709,7 +709,10 @@ function renderUiState() {
   generateBtn.disabled = state.generating;
   renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
   if (generateVideoBtnEl) {
-    generateVideoBtnEl.disabled = state.videoGenerating || state.videoRendering || !state.imageUrl || !getCurrentCarModel();
+    const selectedSavedVideo = findLibraryVideoByUrl(state.videoResultUrl);
+    const canRemixSavedVideo = Boolean(selectedSavedVideo);
+    const canGenerateNewVideo = Boolean(state.imageUrl && getCurrentCarModel());
+    generateVideoBtnEl.disabled = state.videoGenerating || state.videoRendering || !(canRemixSavedVideo || canGenerateNewVideo);
     generateVideoBtnEl.textContent = state.videoRendering ? "Generating Video..." : "Generate Video";
   }
   renderTabs();
