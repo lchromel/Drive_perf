@@ -182,13 +182,12 @@ const textSetsWrapEl = document.getElementById("textSetsWrap");
 const addTextSetBtn = document.getElementById("addTextSetBtn");
 const renderBannersBtn = document.getElementById("renderBannersBtn");
 const bannerSetsViewEl = document.getElementById("bannerSetsView");
-const generateVideoPromptBtnEl = document.getElementById("generateVideoPromptBtn");
 const generateVideoBtnEl = document.getElementById("generateVideoBtn");
-const videoPromptOutputEl = document.getElementById("videoPromptOutput");
 const videoRenderStatusEl = document.getElementById("videoRenderStatus");
 const videoResultWrapEl = document.getElementById("videoResultWrap");
 const videoResultPlayerEl = document.getElementById("videoResultPlayer");
 const videoDownloadLinkEl = document.getElementById("videoDownloadLink");
+const videoEmptyStateEl = document.getElementById("videoEmptyState");
 let bannerAutoRenderTimer = null;
 let customAccentTapCount = 0;
 let customAccentTapTimer = null;
@@ -499,9 +498,9 @@ function renderTopAction() {
     return;
   }
   if (state.activeTab === "video") {
-    topActionBtn.classList.remove("hidden");
-    topActionBtn.textContent = "Copy";
-    topActionBtn.disabled = state.videoGenerating || state.videoRendering || !state.videoPromptText.trim();
+    topActionBtn.classList.toggle("hidden", !state.videoResultUrl);
+    topActionBtn.textContent = "Download";
+    topActionBtn.disabled = state.videoGenerating || state.videoRendering || !state.videoResultUrl.trim();
     return;
   }
   {
@@ -527,7 +526,7 @@ function renderUiState() {
     } else if (state.videoRendering) {
       loaderLabelEl.textContent = "Generating video";
     } else if (state.videoGenerating) {
-      loaderLabelEl.textContent = "Generating video prompt";
+      loaderLabelEl.textContent = "Preparing video";
     } else if (state.bannerStage === "uncropping") {
       loaderLabelEl.textContent = "Uncropping";
     } else if (state.bannerStage === "creating") {
@@ -538,11 +537,6 @@ function renderUiState() {
   }
   generateBtn.disabled = state.generating;
   renderBannersBtn.disabled = state.bannerRendering || !state.bannerSourceImageUrl;
-  if (generateVideoPromptBtnEl) {
-    generateVideoPromptBtnEl.disabled =
-      state.videoGenerating || state.videoRendering || !state.imageUrl || !getCurrentCarModel();
-    generateVideoPromptBtnEl.textContent = state.videoGenerating ? "Generating..." : "Generate Video Prompt";
-  }
   if (generateVideoBtnEl) {
     generateVideoBtnEl.disabled = state.videoGenerating || state.videoRendering || !state.imageUrl || !getCurrentCarModel();
     generateVideoBtnEl.textContent = state.videoRendering ? "Generating Video..." : "Generate Video";
@@ -561,15 +555,15 @@ function renderUiState() {
   if (promptInputEl.value !== state.editPromptText) {
     promptInputEl.value = state.editPromptText;
   }
-  if (videoPromptOutputEl && videoPromptOutputEl.value !== state.videoPromptText) {
-    videoPromptOutputEl.value = state.videoPromptText;
-  }
   if (videoRenderStatusEl) {
     videoRenderStatusEl.textContent = state.videoRenderStatus;
   }
   if (videoResultWrapEl && videoResultPlayerEl && videoDownloadLinkEl) {
     const hasVideo = Boolean(state.videoResultUrl);
     videoResultWrapEl.classList.toggle("hidden", !hasVideo);
+    if (videoEmptyStateEl) {
+      videoEmptyStateEl.classList.toggle("hidden", hasVideo);
+    }
     if (hasVideo) {
       if (videoResultPlayerEl.getAttribute("src") !== state.videoResultUrl) {
         videoResultPlayerEl.src = state.videoResultUrl;
@@ -1456,9 +1450,6 @@ if (bannerAccentColorInput) {
 }
 
 generateBtn.addEventListener("click", generatePrompt);
-if (generateVideoPromptBtnEl) {
-  generateVideoPromptBtnEl.addEventListener("click", generateVideoPrompt);
-}
 if (generateVideoBtnEl) {
   generateVideoBtnEl.addEventListener("click", generateVideoFromPrompt);
 }
@@ -1653,11 +1644,11 @@ topActionBtn.addEventListener("click", async () => {
   }
 
   if (state.activeTab === "video") {
-    const copyValue = state.videoPromptText.trim();
-    if (!copyValue) return;
+    const videoUrl = state.videoResultUrl.trim();
+    if (!videoUrl) return;
     try {
-      await navigator.clipboard.writeText(copyValue);
-      topActionBtn.textContent = "Copied";
+      window.open(videoUrl, "_blank", "noopener,noreferrer");
+      topActionBtn.textContent = "Opening";
       setTimeout(renderTopAction, 1000);
     } catch (_e) {
       topActionBtn.textContent = "Failed";
@@ -1717,12 +1708,6 @@ if (document.fonts && document.fonts.ready) {
 promptInputEl.addEventListener("input", (event) => {
   state.editPromptText = event.target.value;
 });
-
-if (videoPromptOutputEl) {
-  videoPromptOutputEl.addEventListener("input", (event) => {
-    state.videoPromptText = event.target.value;
-  });
-}
 
 if (promptBackBtn) {
   promptBackBtn.addEventListener("click", () => {

@@ -146,9 +146,9 @@
             </section>
 
             <section class="section">
-              <p class="field-label">Prompt Style:</p>
+              <p class="field-label">Generation:</p>
               <p class="video-helper-text">
-                GPT will build a Kling 3.0 multi-scene prompt from the current photo and car model.
+                The app will build the video prompt automatically and then generate the video.
               </p>
             </section>
 
@@ -158,9 +158,8 @@
             </section>
           </div>
 
-          <section class="section section-generate section-generate-stack">
-            <button id="generateVideoPromptBtn" class="generate-btn" type="button">Generate Video Prompt</button>
-            <button id="generateVideoBtn" class="generate-btn generate-btn-secondary" type="button">Generate Video</button>
+          <section class="section section-generate">
+            <button id="generateVideoBtn" class="generate-btn" type="button">Generate Video</button>
           </section>
         </div>
 
@@ -200,17 +199,14 @@
 
         <div id="videoCanvas" class="tab-canvas">
           <div class="video-workspace">
-            <div class="video-prompt-card">
-              <p class="video-prompt-label">Kling 3.0 Prompt</p>
-              <textarea
-                id="videoPromptOutput"
-                class="video-prompt-output"
-                rows="18"
-                placeholder="Generate an image first, then open Video and create a prompt."
-              ></textarea>
+            <div class="video-result-card">
+              <p class="video-result-label">Generated Video</p>
               <div id="videoResultWrap" class="video-result-wrap hidden">
                 <video id="videoResultPlayer" class="video-result-player" controls playsinline></video>
                 <a id="videoDownloadLink" class="video-download-link hidden" download>Download Video</a>
+              </div>
+              <div id="videoEmptyState" class="video-empty-state">
+                <p class="video-empty-copy">Generate an image first, then create a video in one click.</p>
               </div>
             </div>
           </div>
