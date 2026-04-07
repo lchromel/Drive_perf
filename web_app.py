@@ -556,8 +556,6 @@ def load_tokens_from_file() -> None:
                 "RECRAFT_MODEL",
                 "RECRAFT_SIZE",
                 "KLING_API_KEY",
-                "KLING_BASE_URL",
-                "KLING_MODEL",
                 "REPLICATE_API_TOKEN",
                 "REPLICATE_MODEL",
                 "CLIPDROP_API_KEY",
@@ -1030,14 +1028,12 @@ def _build_replicate_multi_prompt(prompt: str, total_duration: int) -> Optional[
 
 
 def _kling_api_base_url() -> str:
-    return os.getenv("KLING_BASE_URL", "https://api.klingapi.com").strip().rstrip("/")
+    return "https://api.klingapi.com"
 
 
 def _normalize_kling_mode(raw_mode: str) -> str:
-    mode = str(raw_mode or "").strip().lower()
-    if mode in {"pro", "professional"}:
-        return "professional"
-    return "standard"
+    _ = raw_mode
+    return "professional"
 
 
 def _normalize_kling_duration(raw_duration: str) -> int:
@@ -1053,12 +1049,12 @@ def _kling_create_image_to_video_task(image_url: str, prompt: str) -> dict:
     base_url = _kling_api_base_url()
     negative_prompt = os.getenv("KLING_NEGATIVE_PROMPT", "").strip()
     payload = {
-        "model": os.getenv("KLING_MODEL", "kling-v2.6-pro").strip() or "kling-v2.6-pro",
+        "model": "kling-v3",
         "prompt": str(prompt or "").strip(),
         "image": _image_base64_from_url(image_url),
         "duration": _normalize_kling_duration(os.getenv("KLING_DURATION", "5")),
         "aspect_ratio": _closest_video_aspect_ratio_for_image(image_url),
-        "mode": _normalize_kling_mode(os.getenv("KLING_MODE", "professional")),
+        "mode": _normalize_kling_mode("professional"),
     }
     if negative_prompt:
         payload["negative_prompt"] = negative_prompt
