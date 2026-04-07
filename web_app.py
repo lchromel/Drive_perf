@@ -810,128 +810,100 @@ def _save_generated_video_local(remote_url: str) -> str:
     return f"/output/videos/{file_name}"
 
 
-def _b64url_json(data: dict) -> str:
-    raw = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def _b64url_bytes(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _kling_bearer_token() -> str:
-    access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
-    secret_key = os.getenv("KLING_SECRET_KEY", "").strip()
-    if not access_key:
-        raise RuntimeError("KLING_ACCESS_KEY is not set")
-    if not secret_key:
-        raise RuntimeError("KLING_SECRET_KEY is not set")
-
-    now = int(time.time())
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {
-        "iss": access_key,
-        "exp": now + 1800,
-        "nbf": now - 5,
-    }
-    signing_input = f"{_b64url_json(header)}.{_b64url_json(payload)}".encode("ascii")
-    signature = hmac.new(secret_key.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    return f"{signing_input.decode('ascii')}.{_b64url_bytes(signature)}"
-
-
-def _kling_headers() -> dict:
-    bearer_token = _kling_bearer_token()
+def _replicate_headers() -> dict:
+    api_token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not api_token:
+        raise RuntimeError("REPLICATE_API_TOKEN is not set")
     return {
-        "Authorization": f"Bearer {bearer_token}",
+        "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
 
 
-def _kling_create_image_to_video_task(image_url: str, prompt: str) -> str:
-    base_url = os.getenv("KLING_BASE_URL", "https://api-singapore.klingai.com").rstrip("/")
-    model = os.getenv("KLING_MODEL", "kling-v2.6-pro").strip() or "kling-v2.6-pro"
+def _replicate_output_url(prediction: dict) -> str:
+    output = prediction.get("output")
+    if isinstance(output, str) and output.startswith(("http://", "https://")):
+        return output
+    if isinstance(output, list):
+        for item in output:
+            if isinstance(item, str) and item.startswith(("http://", "https://")):
+                return item
+    return ""
+
+
+def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
+    headers = _replicate_headers()
+    base_url = "https://api.replicate.com/v1"
+    model_path = os.getenv("REPLICATE_KLING_MODEL", "kwaivgi/kling-v3-video").strip() or "kwaivgi/kling-v3-video"
+    if "/" not in model_path:
+        raise RuntimeError("REPLICATE_KLING_MODEL must look like owner/model")
+    owner, name = model_path.split("/", 1)
+
+    model_info = _request_json(f"{base_url}/models/{owner}/{name}", "GET", headers)
+    latest_version = model_info.get("latest_version") if isinstance(model_info, dict) else None
+    version_id = ""
+    if isinstance(latest_version, dict):
+        version_id = str(latest_version.get("id", "")).strip()
+    if not version_id:
+        raise RuntimeError("Could not resolve Replicate model version")
+
     duration = int(os.getenv("KLING_DURATION", "5") or "5")
-    if duration not in {5, 10}:
-        duration = 5
-    aspect_ratio = _closest_video_aspect_ratio_for_image(image_url)
-    image_b64 = _image_base64_from_url(image_url)
-    headers = _kling_headers()
-    endpoint = f"{base_url}/v1/videos/image2video"
-    mode = "pro" if model.endswith("-pro") or model.endswith("-o1") else "std"
+    if duration < 3:
+        duration = 3
+    if duration > 15:
+        duration = 15
+    mode = os.getenv("REPLICATE_KLING_MODE", "pro").strip().lower() or "pro"
+    if mode not in {"standard", "pro"}:
+        mode = "pro"
+    generate_audio = os.getenv("REPLICATE_KLING_GENERATE_AUDIO", "").strip().lower() in {"1", "true", "yes"}
+    negative_prompt = os.getenv("REPLICATE_KLING_NEGATIVE_PROMPT", "").strip()
+    input_payload = {
+        "prompt": prompt,
+        "start_image": _image_input_data_url_from_url(image_url),
+        "duration": duration,
+        "mode": mode,
+        "generate_audio": generate_audio,
+    }
+    if negative_prompt:
+        input_payload["negative_prompt"] = negative_prompt
 
-    payload_candidates = [
+    prediction = _request_json(
+        f"{base_url}/predictions",
+        "POST",
+        headers,
         {
-            "model_name": model,
-            "image": image_b64,
-            "prompt": prompt,
-            "duration": duration,
-            "aspect_ratio": aspect_ratio,
-            "mode": mode,
+            "version": f"{model_path}:{version_id}",
+            "input": input_payload,
         },
-        {
-            "model_name": model,
-            "image_url": image_b64,
-            "prompt": prompt,
-            "duration": duration,
-            "aspect_ratio": aspect_ratio,
-            "mode": mode,
-        },
-        {
-            "model_name": model,
-            "input_image": image_b64,
-            "prompt": prompt,
-            "duration": duration,
-            "aspect_ratio": aspect_ratio,
-            "mode": mode,
-        },
-        {
-            "model": model,
-            "image": image_b64,
-            "prompt": prompt,
-            "duration": duration,
-            "aspect_ratio": aspect_ratio,
-            "mode": mode,
-        },
-    ]
-
-    last_error: Optional[Exception] = None
-    for payload in payload_candidates:
-        try:
-            response = _request_json(endpoint, "POST", headers, payload)
-            task_id = _extract_kling_task_id(response)
-            if task_id:
-                return task_id
-        except Exception as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise RuntimeError(f"Kling task creation failed: {last_error}") from last_error
-    raise RuntimeError("Kling task creation failed: no task_id returned")
-
-
-def _kling_get_task(task_id: str) -> dict:
-    base_url = os.getenv("KLING_BASE_URL", "https://api-singapore.klingai.com").rstrip("/")
-    headers = _kling_headers()
-    return _request_json(f"{base_url}/v1/videos/{task_id}", "GET", headers)
+    )
+    return prediction
 
 
 def generate_video_with_kling(image_url: str, prompt: str) -> tuple[str, str]:
-    task_id = _kling_create_image_to_video_task(image_url=image_url, prompt=prompt)
+    prediction = _replicate_kling_prediction(image_url=image_url, prompt=prompt)
     timeout_seconds = int(os.getenv("KLING_TIMEOUT_SECONDS", "240") or "240")
     poll_interval = float(os.getenv("KLING_POLL_INTERVAL_SECONDS", "5") or "5")
     started = time.time()
+    prediction_id = str(prediction.get("id", "")).strip()
+    if not prediction_id:
+        raise RuntimeError("Replicate prediction id is missing")
 
     while time.time() - started < timeout_seconds:
-        payload = _kling_get_task(task_id)
-        status = _extract_kling_status(payload)
-        video_url = _extract_kling_video_url(payload)
+        payload = _request_json(
+            f"https://api.replicate.com/v1/predictions/{prediction_id}",
+            "GET",
+            _replicate_headers(),
+        )
+        status = str(payload.get("status", "")).strip().lower()
+        video_url = _replicate_output_url(payload)
         if video_url:
             return video_url, _save_generated_video_local(video_url)
-        if status in {"failed", "error", "canceled", "cancelled"}:
-            raise RuntimeError(f"Kling generation failed with status: {status}")
+        if status in {"failed", "canceled", "cancelled"}:
+            error_detail = str(payload.get("error") or status).strip()
+            raise RuntimeError(f"Replicate Kling generation failed: {error_detail}")
         time.sleep(max(1.0, poll_interval))
 
-    raise RuntimeError("Kling generation timed out")
+    raise RuntimeError("Replicate Kling generation timed out")
 
 
 def _save_generated_image_bytes(image_bytes: bytes, *, prefix: str = "generated") -> str:
