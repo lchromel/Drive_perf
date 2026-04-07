@@ -834,16 +834,10 @@ def _replicate_output_url(prediction: dict) -> str:
 def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
     headers = _replicate_headers()
     base_url = "https://api.replicate.com/v1"
-    model_path = os.getenv("REPLICATE_KLING_MODEL", "kwaivgi/kling-v3-video").strip() or "kwaivgi/kling-v3-video"
-    if "/" not in model_path:
-        raise RuntimeError("REPLICATE_KLING_MODEL must look like owner/model")
-    owner, name = model_path.split("/", 1)
-
-    model_info = _request_json(f"{base_url}/models/{owner}/{name}", "GET", headers)
-    latest_version = model_info.get("latest_version") if isinstance(model_info, dict) else None
-    version_id = ""
-    if isinstance(latest_version, dict):
-        version_id = str(latest_version.get("id", "")).strip()
+    version_id = os.getenv(
+        "REPLICATE_KLING_VERSION",
+        "96029e71b109a5d5d554a4b599767cc34ad53bec444e671257ff384beb5badde",
+    ).strip()
     if not version_id:
         raise RuntimeError("Could not resolve Replicate model version")
 
@@ -872,7 +866,7 @@ def _replicate_kling_prediction(image_url: str, prompt: str) -> dict:
         "POST",
         headers,
         {
-            "version": f"{model_path}:{version_id}",
+            "version": version_id,
             "input": input_payload,
         },
     )
